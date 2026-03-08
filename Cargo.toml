@@ -131,9 +131,9 @@ ai = ["vector-index", "text-index", "hybrid-search", "cdc"]
 # Engine: data models (forwarded)
 rdf = ["grafeo-service/rdf"]
 
-# Tiers
-lite = ["gql", "storage", "gwp"]
-boltr = ["http", "bolt", "studio", "all-languages", "storage", "algos"]
+# Tiers (named build profiles)
+gwp = ["gql", "storage", "dep:grafeo-gwp"]
+bolt = ["cypher", "storage", "dep:grafeo-boltr"]
 full = [
     "http", "studio", "all-languages", "algos", "ai", "rdf", "storage", "embed",
     "owl-schema", "rdfs-schema", "json-schema", "auth", "tls", "gwp", "bolt",
