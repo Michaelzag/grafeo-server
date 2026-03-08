@@ -162,6 +162,60 @@ impl AdminService {
         .map_err(|e| ServiceError::Internal(e.to_string()))?
     }
 
+    /// Get query plan cache statistics.
+    pub async fn cache_stats(
+        databases: &DatabaseManager,
+        db_name: &str,
+    ) -> Result<types::CacheStatsInfo, ServiceError> {
+        let entry = databases
+            .get(db_name)
+            .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
+
+        let stats = tokio::task::spawn_blocking(move || entry.db.query_cache().stats())
+            .await
+            .map_err(|e| ServiceError::Internal(e.to_string()))?;
+
+        let parsed_hit_rate = if stats.parsed_hits + stats.parsed_misses > 0 {
+            Some(stats.parsed_hits as f64 / (stats.parsed_hits + stats.parsed_misses) as f64)
+        } else {
+            None
+        };
+        let optimized_hit_rate = if stats.optimized_hits + stats.optimized_misses > 0 {
+            Some(
+                stats.optimized_hits as f64
+                    / (stats.optimized_hits + stats.optimized_misses) as f64,
+            )
+        } else {
+            None
+        };
+
+        Ok(types::CacheStatsInfo {
+            parsed_size: stats.parsed_size,
+            optimized_size: stats.optimized_size,
+            parsed_hits: stats.parsed_hits,
+            parsed_misses: stats.parsed_misses,
+            optimized_hits: stats.optimized_hits,
+            optimized_misses: stats.optimized_misses,
+            invalidations: stats.invalidations,
+            parsed_hit_rate,
+            optimized_hit_rate,
+        })
+    }
+
+    /// Clear the query plan cache for a database.
+    pub async fn clear_cache(
+        databases: &DatabaseManager,
+        db_name: &str,
+    ) -> Result<(), ServiceError> {
+        let entry = databases
+            .get(db_name)
+            .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
+
+        tokio::task::spawn_blocking(move || entry.db.clear_plan_cache())
+            .await
+            .map_err(|e| ServiceError::Internal(e.to_string()))
+    }
+
     /// Drop an index from a database.
     pub async fn drop_index(
         databases: &DatabaseManager,
