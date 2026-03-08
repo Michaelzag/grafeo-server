@@ -291,7 +291,10 @@ mod tests {
         let GwpValue::LocalTime(t) = &gwp else {
             panic!("expected GwpValue::LocalTime, got {gwp:?}");
         };
-        assert_eq!((t.hour, t.minute, t.second, t.nanosecond), (14, 30, 45, 123_000_000));
+        assert_eq!(
+            (t.hour, t.minute, t.second, t.nanosecond),
+            (14, 30, 45, 123_000_000)
+        );
 
         let grafeo = gwp_to_grafeo(&gwp).unwrap();
         if let Value::Time(t) = grafeo {
