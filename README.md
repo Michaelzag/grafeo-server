@@ -12,6 +12,8 @@ Graph database server for the [Grafeo](https://github.com/GrafeoDB/grafeo) engin
 
 Pure Rust, single binary. Available in four tiers to match different deployment needs.
 
+[![Grafeo Studio](assets/studio.png)](http://localhost:7474/studio/)
+
 ## Quick Start
 
 ### Docker Hub
