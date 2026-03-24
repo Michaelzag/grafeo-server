@@ -18,6 +18,10 @@ pub struct Config {
     #[arg(long, env = "GRAFEO_DATA_DIR")]
     pub data_dir: Option<String>,
 
+    /// Open all databases in read-only mode (GRAFEO_READ_ONLY)
+    #[arg(long, default_value_t = false, env = "GRAFEO_READ_ONLY")]
+    pub read_only: bool,
+
     /// Transaction session timeout in seconds.
     #[arg(long, default_value_t = 300, env = "GRAFEO_SESSION_TTL")]
     pub session_ttl: u64,

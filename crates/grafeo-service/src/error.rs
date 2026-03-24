@@ -34,6 +34,10 @@ pub enum ServiceError {
     #[error("too many requests")]
     TooManyRequests,
 
+    /// Operation rejected because server is in read-only mode.
+    #[error("server is in read-only mode")]
+    ReadOnly,
+
     /// Internal server error.
     #[error("internal error: {0}")]
     Internal(String),

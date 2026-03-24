@@ -76,6 +76,8 @@ pub struct HealthResponse {
     pub engine_version: String,
     /// Whether the server is using persistent storage.
     pub persistent: bool,
+    /// Whether the server is in read-only mode.
+    pub read_only: bool,
     /// Server uptime in seconds.
     pub uptime_seconds: u64,
     /// Number of active transaction sessions across all databases.
@@ -97,6 +99,8 @@ pub struct SystemResources {
     pub available_disk_bytes: Option<u64>,
     /// Whether persistent storage is available (data_dir is set).
     pub persistent_available: bool,
+    /// Whether the server is in read-only mode.
+    pub read_only: bool,
     /// Available database types based on compiled features.
     pub available_types: Vec<String>,
     /// Default values for database options.

@@ -196,6 +196,7 @@ pub struct HealthInfo {
     pub version: String,
     pub engine_version: String,
     pub persistent: bool,
+    pub read_only: bool,
     pub uptime_seconds: u64,
     pub active_sessions: usize,
     pub enabled_languages: Vec<String>,

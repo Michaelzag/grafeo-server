@@ -25,6 +25,7 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
         version: env!("CARGO_PKG_VERSION").to_string(),
         engine_version: env!("GRAFEO_ENGINE_VERSION").to_string(),
         persistent: dbs.data_dir().is_some(),
+        read_only: dbs.is_read_only(),
         uptime_seconds: state.uptime_secs(),
         active_sessions: state.sessions().active_count(),
         features: state.enabled_features().clone(),
@@ -90,6 +91,7 @@ pub async fn system_resources(State(state): State<AppState>) -> impl IntoRespons
         available_memory_bytes,
         available_disk_bytes,
         persistent_available,
+        read_only: state.databases().is_read_only(),
         available_types,
         defaults: ResourceDefaults {
             memory_limit_bytes: 512 * 1024 * 1024,
@@ -108,6 +110,7 @@ pub async fn metrics_endpoint(State(state): State<AppState>) -> impl IntoRespons
     let db_list = dbs.list();
     let nodes_total: usize = db_list.iter().map(|d| d.node_count).sum();
     let edges_total: usize = db_list.iter().map(|d| d.edge_count).sum();
+    let engine_metrics = dbs.engine_prometheus_metrics();
 
     let body = state.metrics().render(
         db_list.len(),
@@ -115,6 +118,7 @@ pub async fn metrics_endpoint(State(state): State<AppState>) -> impl IntoRespons
         edges_total,
         state.sessions().active_count(),
         state.uptime_secs(),
+        engine_metrics.as_deref(),
     );
 
     (

@@ -31,6 +31,7 @@ async fn main() {
 
     let service_config = ServiceConfig {
         data_dir: config.data_dir.clone(),
+        read_only: config.read_only,
         session_ttl: config.session_ttl,
         query_timeout: config.query_timeout,
         rate_limit: config.rate_limit,
@@ -45,9 +46,14 @@ async fn main() {
 
     let service = ServiceState::new(&service_config);
 
+    if config.read_only && config.data_dir.is_none() {
+        tracing::warn!("Read-only mode has no effect without --data-dir");
+    }
+
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         persistent = config.data_dir.is_some(),
+        read_only = config.read_only,
         "Grafeo Server starting",
     );
 
@@ -282,6 +288,18 @@ fn detect_features() -> EnabledFeatures {
     }
     if cfg!(feature = "embed") {
         engine.push("embed".to_string());
+    }
+    if cfg!(feature = "temporal") {
+        engine.push("temporal".to_string());
+    }
+    if cfg!(feature = "metrics") {
+        engine.push("metrics".to_string());
+    }
+    if cfg!(feature = "jsonl-import") {
+        engine.push("jsonl-import".to_string());
+    }
+    if cfg!(feature = "parquet-import") {
+        engine.push("parquet-import".to_string());
     }
 
     let mut server = Vec::new();

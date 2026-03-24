@@ -112,6 +112,9 @@ impl Metrics {
     }
 
     /// Render all metrics in Prometheus text exposition format.
+    ///
+    /// When `engine_metrics` is provided, the engine's own Prometheus output
+    /// is appended after a blank separator line.
     pub fn render(
         &self,
         databases_total: usize,
@@ -119,6 +122,7 @@ impl Metrics {
         edges_total: usize,
         active_sessions: usize,
         uptime_seconds: u64,
+        engine_metrics: Option<&str>,
     ) -> String {
         let mut out = String::with_capacity(2048);
 
@@ -216,6 +220,12 @@ impl Metrics {
             .unwrap();
         }
 
+        // Append engine-level Prometheus metrics (when available)
+        if let Some(engine) = engine_metrics {
+            out.push('\n');
+            out.push_str(engine);
+        }
+
         out
     }
 }
@@ -277,7 +287,7 @@ mod tests {
         m.record_query(Language::Gql, 2_500);
         m.record_query_error(Language::Cypher);
 
-        let output = m.render(2, 100, 50, 3, 60);
+        let output = m.render(2, 100, 50, 3, 60, None);
         assert!(output.contains("grafeo_databases_total 2"));
         assert!(output.contains("grafeo_nodes_total 100"));
         assert!(output.contains("grafeo_edges_total 50"));

@@ -5,6 +5,24 @@ All notable changes to grafeo-server are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.8] - 2026-03-24
+
+### Added
+
+- **Engine Prometheus metrics integration**: `/metrics` endpoint now includes per-database engine metrics (when the `metrics` feature is enabled), appended to existing server-level Prometheus output
+- **Read-only mode**: `--read-only` / `GRAFEO_READ_ONLY` opens all databases in read-only mode; mutating operations return HTTP 403 with `"read_only"` error code; `ServiceError::ReadOnly` variant added to the service error enum
+- **`temporal` feature flag**: forwards the engine's append-only versioned properties feature through the feature chain
+- **`jsonl-import` and `parquet-import` feature flags**: forward engine LOAD DATA format support for JSONL and Parquet imports
+- **`metrics` feature flag**: forwards engine-level Prometheus metrics collection
+- **`import` composite feature**: enables both `jsonl-import` and `parquet-import` in one flag
+
+### Changed
+
+- Bumped grafeo-engine and grafeo-common to **0.5.24**
+- `full` tier now includes `temporal`, `import`, and `metrics` features
+- `detect_features()` reports `temporal`, `metrics`, `jsonl-import`, and `parquet-import` in the health endpoint when enabled
+- 184 total tests (112 integration + 72 workspace unit tests)
+
 ## [0.4.7] - 2026-03-14
 
 ### Added
@@ -377,7 +395,8 @@ Initial release.
 - **Pre-commit hooks** (prek): fmt, clippy, deny, typos
 - **Integration test suite**: health, query, Cypher, transactions, multi-database CRUD, error cases, UI redirect, auth
 
-[Unreleased]: https://github.com/GrafeoDB/grafeo-server/compare/v0.4.7...HEAD
+[Unreleased]: https://github.com/GrafeoDB/grafeo-server/compare/v0.4.8...HEAD
+[0.4.8]: https://github.com/GrafeoDB/grafeo-server/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/GrafeoDB/grafeo-server/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/GrafeoDB/grafeo-server/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/GrafeoDB/grafeo-server/compare/v0.4.4...v0.4.5

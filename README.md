@@ -46,7 +46,7 @@ docker run -p 7687:7687 grafeo/grafeo-server:bolt --data-dir /data
 docker run -p 7474:7474 -p 7687:7687 -p 7688:7688 grafeo/grafeo-server:full
 ```
 
-Versioned tags: `grafeo-server:0.4.7`, `grafeo-server:0.4.7-gwp`, `grafeo-server:0.4.7-bolt`, `grafeo-server:0.4.7-full`.
+Versioned tags: `grafeo-server:0.4.8`, `grafeo-server:0.4.8-gwp`, `grafeo-server:0.4.8-bolt`, `grafeo-server:0.4.8-full`.
 
 See [grafeo/grafeo-server on Docker Hub](https://hub.docker.com/r/grafeo/grafeo-server) for all available tags.
 
@@ -297,6 +297,7 @@ All settings are available as CLI flags and environment variables (prefix `GRAFE
 | `GRAFEO_HOST` | `--host` | `0.0.0.0` | Bind address |
 | `GRAFEO_PORT` | `--port` | `7474` | HTTP bind port |
 | `GRAFEO_DATA_DIR` | `--data-dir` | _(none)_ | Persistence directory (omit for in-memory) |
+| `GRAFEO_READ_ONLY` | `--read-only` | `false` | Open all databases in read-only mode |
 | `GRAFEO_SESSION_TTL` | `--session-ttl` | `300` | Transaction session timeout (seconds) |
 | `GRAFEO_QUERY_TIMEOUT` | `--query-timeout` | `30` | Query execution timeout in seconds (0 = disabled) |
 | `GRAFEO_GWP_PORT` | `--gwp-port` | `7688` | GQL Wire Protocol (gRPC) port |
@@ -418,6 +419,9 @@ Start with `--no-default-features` and pick what you need. The matrix below show
 | `ai` | vector-index + text-index + hybrid-search + cdc | Nothing |
 | `rdf` | RDF triple store | Enabled automatically by `sparql` |
 | `embed` | In-process ONNX embedding generation (~17 MB) | Nothing |
+| `temporal` | Append-only versioned properties | Nothing |
+| `import` | LOAD DATA format support (jsonl-import + parquet-import) | Nothing |
+| `metrics` | Engine-level Prometheus metrics | Nothing |
 
 **Server extras** (require `http`):
 
