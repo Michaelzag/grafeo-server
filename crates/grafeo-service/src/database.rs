@@ -470,7 +470,7 @@ impl DatabaseManager {
         {
             let mut output = String::new();
             let mut seen_headers = std::collections::HashSet::new();
-            for entry in self.databases.iter() {
+            for entry in &self.databases {
                 let name = entry.key();
                 let text = entry.value().db.metrics_prometheus();
                 if text.is_empty() {
@@ -491,13 +491,19 @@ impl DatabaseManager {
                         // e.g. "grafeo_x{lang=\"gql\"} 1" -> "grafeo_x{database=\"default\",lang=\"gql\"} 1"
                         if let Some(brace_pos) = line.find('{') {
                             // Already has labels: insert database label after opening brace
-                            output.push_str(&line[..brace_pos + 1]);
-                            output.push_str(&format!("database=\"{name}\","));
+                            output.push_str(&line[..=brace_pos]);
+                            output.push_str("database=\"");
+                            output.push_str(name);
+                            output.push_str("\",");
                             output.push_str(&line[brace_pos + 1..]);
                         } else if let Some(space_pos) = line.find(' ') {
                             // No labels: insert {database="name"} before the space
                             output.push_str(&line[..space_pos]);
-                            output.push_str(&format!("{{database=\"{name}\"}}"));
+                            output.push('{');
+                            output.push_str("database=\"");
+                            output.push_str(name);
+                            output.push_str("\"}");
+
                             output.push_str(&line[space_pos..]);
                         } else {
                             output.push_str(line);

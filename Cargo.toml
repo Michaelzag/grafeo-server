@@ -16,9 +16,9 @@ license = "Apache-2.0"
 repository = "https://github.com/GrafeoDB/grafeo-server"
 
 [workspace.dependencies]
-# Engine
-grafeo-engine = { version = "0.5.24", default-features = false }
-grafeo-common = "0.5.24"
+# Engine (path deps for local development; switch to version = "..." for releases)
+grafeo-engine = { path = "../grafeo/crates/grafeo-engine", default-features = false }
+grafeo-common = { path = "../grafeo/crates/grafeo-common" }
 
 # Internal crates
 grafeo-service = { path = "crates/grafeo-service" }

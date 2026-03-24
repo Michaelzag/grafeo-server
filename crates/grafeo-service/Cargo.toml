@@ -82,6 +82,9 @@ owl-schema = ["dep:sophia_turtle", "dep:sophia_api", "dep:sophia_inmem"]
 rdfs-schema = ["owl-schema"]
 json-schema = ["dep:jsonschema"]
 
+# Sync: pull-based changefeed for offline-first applications
+sync = ["cdc"]
+
 # Auth provider
 auth = ["dep:subtle"]
 

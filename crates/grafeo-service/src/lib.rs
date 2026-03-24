@@ -21,6 +21,8 @@ pub mod schema;
 pub mod search;
 pub mod session;
 pub mod stream;
+#[cfg(feature = "sync")]
+pub mod sync;
 pub mod types;
 
 use std::sync::Arc;

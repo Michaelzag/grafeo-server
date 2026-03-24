@@ -5,6 +5,21 @@ All notable changes to grafeo-server are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.9] - Unreleased
+
+### Added
+
+- **Offline-first changefeed** (`sync` feature): `GET /db/{name}/changes?since={epoch}&limit={n}` returns a paginated JSON array of CDC events (creates, updates, deletes) for nodes, edges, and RDF triples. Store `server_epoch` from the response and pass it as `since` on the next poll to receive only new changes
+- **Offline-first sync apply** (`sync` feature): `POST /db/{name}/sync` accepts a `{ client_id, last_seen_epoch, changes: [...] }` body and applies the changeset with last-write-wins (LWW) conflict resolution. Returns `{ server_epoch, applied, skipped, conflicts, id_mappings }`. The `id_mappings` array maps each create request (by index) to the server-assigned entity ID. Idempotent: replaying the same request twice produces the same state
+- **RDF triple events in changefeed**: SPARQL INSERT DATA / DELETE DATA mutations now appear in the changefeed with `entity_type: "triple"` and N-Triples-encoded `triple_subject`, `triple_predicate`, `triple_object`, and `triple_graph` fields (requires `cdc` + `rdf` features in grafeo-engine)
+
+### Changed
+
+- Bumped grafeo-engine and grafeo-common to **0.5.25** (RDF CDC bridge, CDC structural metadata on create events)
+- `ChangeEventDto` extended with `triple_subject`, `triple_predicate`, `triple_object`, `triple_graph` fields; `entity_type` now also accepts `"triple"`
+- `full` tier now includes `sync` feature
+- 42 total unit tests (21 new sync tests)
+
 ## [0.4.8] - 2026-03-24
 
 ### Added

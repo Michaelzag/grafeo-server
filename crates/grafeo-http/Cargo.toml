@@ -48,6 +48,7 @@ hyper-util = { version = "0.1", features = ["tokio", "server-auto"], optional = 
 [features]
 default = []
 auth = ["grafeo-service/auth"]
+sync = ["grafeo-service/sync"]
 tls = ["dep:tokio-rustls", "dep:rustls", "dep:hyper", "dep:hyper-util"]
 
 [lints]

@@ -182,7 +182,15 @@ pub fn router(state: AppState) -> Router {
         // System
         .route("/health", get(routes::system::health))
         .route("/system/resources", get(routes::system::system_resources))
-        .route("/metrics", get(routes::system::metrics_endpoint))
+        .route("/metrics", get(routes::system::metrics_endpoint));
+
+    // Sync: offline-first changefeed + apply (requires `sync` feature, implies `cdc`)
+    #[cfg(feature = "sync")]
+    let api = api
+        .route("/db/{name}/changes", get(routes::sync::db_changes))
+        .route("/db/{name}/sync", post(routes::sync::db_apply));
+
+    let api = api
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http());
 

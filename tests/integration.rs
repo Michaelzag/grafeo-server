@@ -2870,7 +2870,7 @@ async fn bolt_transaction_commit() {
 
     // Begin transaction, create a node, commit
     session.begin().await.unwrap();
-    session.run("CREATE (:BoltTxTest {val: 42})").await.unwrap();
+    let _ = session.run("CREATE (:BoltTxTest {val: 42})").await.unwrap();
     session.commit().await.unwrap();
 
     // Verify committed data is visible
@@ -2894,7 +2894,7 @@ async fn bolt_transaction_rollback() {
 
     // Begin transaction, create a node, rollback
     session.begin().await.unwrap();
-    session.run("CREATE (:BoltRbTest {val: 99})").await.unwrap();
+    let _ = session.run("CREATE (:BoltRbTest {val: 99})").await.unwrap();
     session.rollback().await.unwrap();
 
     // Verify rolled-back data is NOT visible
@@ -2946,7 +2946,7 @@ async fn bolt_query_with_parameters() {
         boltr::types::BoltValue::String("Charlie".to_string()),
     );
 
-    session
+    let _ = session
         .run_with_params(
             "CREATE (:BoltParamTest {name: $name})",
             params,
@@ -2996,9 +2996,9 @@ async fn bolt_multiple_queries_in_session() {
         .unwrap();
 
     // Run multiple queries on the same session
-    session.run("CREATE (:BoltMulti {seq: 1})").await.unwrap();
-    session.run("CREATE (:BoltMulti {seq: 2})").await.unwrap();
-    session.run("CREATE (:BoltMulti {seq: 3})").await.unwrap();
+    let _ = session.run("CREATE (:BoltMulti {seq: 1})").await.unwrap();
+    let _ = session.run("CREATE (:BoltMulti {seq: 2})").await.unwrap();
+    let _ = session.run("CREATE (:BoltMulti {seq: 3})").await.unwrap();
 
     let result = session
         .run("MATCH (n:BoltMulti) RETURN n.seq ORDER BY n.seq")
@@ -3068,7 +3068,7 @@ async fn bolt_database_switching() {
         "db".to_string(),
         boltr::types::BoltValue::String("bolt-switch-db".to_string()),
     )]);
-    session
+    let _ = session
         .run_with_params(
             "CREATE (:SwitchTest {name: 'A'})",
             std::collections::HashMap::new(),
@@ -3116,7 +3116,7 @@ async fn bolt_language_dispatch() {
         .unwrap();
 
     // Seed some data first (auto-detected as Cypher)
-    session.run("CREATE (:LangTest {val: 1})").await.unwrap();
+    let _ = session.run("CREATE (:LangTest {val: 1})").await.unwrap();
 
     // Run a Cypher query using the language extension
     let cypher_extra = boltr::types::BoltDict::from([(
