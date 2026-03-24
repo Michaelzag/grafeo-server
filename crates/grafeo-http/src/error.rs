@@ -97,6 +97,11 @@ impl IntoResponse for ApiError {
             ServiceError::TooManyRequests => {
                 (StatusCode::TOO_MANY_REQUESTS, "too_many_requests", None)
             }
+            ServiceError::ReadOnly => (
+                StatusCode::FORBIDDEN,
+                "read_only",
+                Some("server is in read-only mode".to_string()),
+            ),
             ServiceError::Internal(msg) => {
                 tracing::error!(%msg, "internal server error");
                 (

@@ -64,6 +64,10 @@ impl AdminService {
         databases: &DatabaseManager,
         db_name: &str,
     ) -> Result<(), ServiceError> {
+        if databases.is_read_only() {
+            return Err(ServiceError::ReadOnly);
+        }
+
         let entry = databases
             .get(db_name)
             .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
@@ -116,6 +120,10 @@ impl AdminService {
         db_name: &str,
         index: types::IndexDef,
     ) -> Result<(), ServiceError> {
+        if databases.is_read_only() {
+            return Err(ServiceError::ReadOnly);
+        }
+
         let entry = databases
             .get(db_name)
             .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
@@ -254,6 +262,10 @@ impl AdminService {
         db_name: &str,
         graph_name: String,
     ) -> Result<bool, ServiceError> {
+        if databases.is_read_only() {
+            return Err(ServiceError::ReadOnly);
+        }
+
         let entry = databases
             .get(db_name)
             .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
@@ -272,6 +284,10 @@ impl AdminService {
         db_name: &str,
         graph_name: String,
     ) -> Result<bool, ServiceError> {
+        if databases.is_read_only() {
+            return Err(ServiceError::ReadOnly);
+        }
+
         let entry = databases
             .get(db_name)
             .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
@@ -287,6 +303,10 @@ impl AdminService {
         db_name: &str,
         index: types::IndexDef,
     ) -> Result<bool, ServiceError> {
+        if databases.is_read_only() {
+            return Err(ServiceError::ReadOnly);
+        }
+
         let entry = databases
             .get(db_name)
             .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;

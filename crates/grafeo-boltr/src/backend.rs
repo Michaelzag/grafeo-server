@@ -264,23 +264,27 @@ impl BoltBackend for GrafeoBackend {
         let db_name = db.unwrap_or("default").to_string();
 
         // Single-server routing: this node serves all roles.
+        // In read-only mode, omit the WRITE role.
+        let mut servers = Vec::new();
+        if !self.state.databases().is_read_only() {
+            servers.push(RoutingServer {
+                addresses: vec![addr.clone()],
+                role: "WRITE".to_string(),
+            });
+        }
+        servers.push(RoutingServer {
+            addresses: vec![addr.clone()],
+            role: "READ".to_string(),
+        });
+        servers.push(RoutingServer {
+            addresses: vec![addr],
+            role: "ROUTE".to_string(),
+        });
+
         Ok(RoutingTable {
             ttl: 300,
             db: db_name,
-            servers: vec![
-                RoutingServer {
-                    addresses: vec![addr.clone()],
-                    role: "WRITE".to_string(),
-                },
-                RoutingServer {
-                    addresses: vec![addr.clone()],
-                    role: "READ".to_string(),
-                },
-                RoutingServer {
-                    addresses: vec![addr],
-                    role: "ROUTE".to_string(),
-                },
-            ],
+            servers,
         })
     }
 }

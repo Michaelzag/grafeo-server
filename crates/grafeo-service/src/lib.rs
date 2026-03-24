@@ -38,6 +38,7 @@ use session::SessionRegistry;
 /// the binary crate's `Config` struct.
 pub struct ServiceConfig {
     pub data_dir: Option<String>,
+    pub read_only: bool,
     pub session_ttl: u64,
     pub query_timeout: u64,
     pub rate_limit: u64,
@@ -67,6 +68,7 @@ struct Inner {
     session_ttl: u64,
     query_timeout: Duration,
     start_time: Instant,
+    read_only: bool,
     #[cfg(feature = "auth")]
     auth: Option<auth::AuthProvider>,
 }
@@ -76,7 +78,7 @@ impl ServiceState {
     pub fn new(config: &ServiceConfig) -> Self {
         Self {
             inner: Arc::new(Inner {
-                databases: DatabaseManager::new(config.data_dir.as_deref()),
+                databases: DatabaseManager::new(config.data_dir.as_deref(), config.read_only),
                 sessions: SessionRegistry::new(),
                 metrics: Metrics::new(),
                 rate_limiter: RateLimiter::new(
@@ -86,6 +88,7 @@ impl ServiceState {
                 session_ttl: config.session_ttl,
                 query_timeout: Duration::from_secs(config.query_timeout),
                 start_time: Instant::now(),
+                read_only: config.read_only,
                 #[cfg(feature = "auth")]
                 auth: auth::AuthProvider::new(
                     config.auth_token.clone(),
@@ -100,13 +103,14 @@ impl ServiceState {
     pub fn new_in_memory(session_ttl: u64) -> Self {
         Self {
             inner: Arc::new(Inner {
-                databases: DatabaseManager::new(None),
+                databases: DatabaseManager::new(None, false),
                 sessions: SessionRegistry::new(),
                 metrics: Metrics::new(),
                 rate_limiter: RateLimiter::new(0, Duration::from_secs(60)),
                 session_ttl,
                 query_timeout: Duration::from_secs(30),
                 start_time: Instant::now(),
+                read_only: false,
                 #[cfg(feature = "auth")]
                 auth: None,
             }),
@@ -118,13 +122,14 @@ impl ServiceState {
     pub fn new_in_memory_with_auth(session_ttl: u64, auth_token: String) -> Self {
         Self {
             inner: Arc::new(Inner {
-                databases: DatabaseManager::new(None),
+                databases: DatabaseManager::new(None, false),
                 sessions: SessionRegistry::new(),
                 metrics: Metrics::new(),
                 rate_limiter: RateLimiter::new(0, Duration::from_secs(60)),
                 session_ttl,
                 query_timeout: Duration::from_secs(30),
                 start_time: Instant::now(),
+                read_only: false,
                 auth: auth::AuthProvider::new(Some(auth_token), None, None),
             }),
         }
@@ -135,13 +140,14 @@ impl ServiceState {
     pub fn new_in_memory_with_basic_auth(session_ttl: u64, user: String, password: String) -> Self {
         Self {
             inner: Arc::new(Inner {
-                databases: DatabaseManager::new(None),
+                databases: DatabaseManager::new(None, false),
                 sessions: SessionRegistry::new(),
                 metrics: Metrics::new(),
                 rate_limiter: RateLimiter::new(0, Duration::from_secs(60)),
                 session_ttl,
                 query_timeout: Duration::from_secs(30),
                 start_time: Instant::now(),
+                read_only: false,
                 auth: auth::AuthProvider::new(None, Some(user), Some(password)),
             }),
         }
@@ -155,13 +161,14 @@ impl ServiceState {
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
-                databases: DatabaseManager::new(None),
+                databases: DatabaseManager::new(None, false),
                 sessions: SessionRegistry::new(),
                 metrics: Metrics::new(),
                 rate_limiter: RateLimiter::new(max_requests, window),
                 session_ttl,
                 query_timeout: Duration::from_secs(30),
                 start_time: Instant::now(),
+                read_only: false,
                 #[cfg(feature = "auth")]
                 auth: None,
             }),
@@ -192,6 +199,10 @@ impl ServiceState {
 
     pub fn query_timeout(&self) -> Duration {
         self.inner.query_timeout
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        self.inner.read_only
     }
 
     pub fn uptime_secs(&self) -> u64 {

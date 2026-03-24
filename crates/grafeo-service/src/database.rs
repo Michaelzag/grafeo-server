@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use grafeo_engine::{Config, DurabilityMode, GrafeoDB};
+use grafeo_engine::{AccessMode, Config, DurabilityMode, GrafeoDB};
 
 use crate::error::ServiceError;
 use crate::types::{CreateDatabaseRequest, DatabaseType, StorageMode};
@@ -80,16 +80,19 @@ pub struct DatabaseManager {
     databases: DashMap<String, Arc<DatabaseEntry>>,
     /// If `Some`, databases are persisted under `{data_dir}/{name}/grafeo.db`.
     data_dir: Option<PathBuf>,
+    /// When `true`, reject all write operations.
+    read_only: bool,
 }
 
 impl DatabaseManager {
     /// Creates a new manager. In persistent mode, scans `data_dir` for existing
     /// database subdirectories and opens each one. Ensures the `"default"` database
     /// always exists. Performs migration from the old single-file layout if needed.
-    pub fn new(data_dir: Option<&str>) -> Self {
+    pub fn new(data_dir: Option<&str>, read_only: bool) -> Self {
         let mgr = Self {
             databases: DashMap::new(),
             data_dir: data_dir.map(PathBuf::from),
+            read_only,
         };
 
         if let Some(ref dir) = mgr.data_dir {
@@ -122,8 +125,15 @@ impl DatabaseManager {
                         let db_file = path.join("grafeo.db");
                         if db_file.exists() {
                             let name = entry.file_name().to_string_lossy().to_string();
-                            tracing::info!(name = %name, "Opening database");
-                            match GrafeoDB::open(db_file.to_str().unwrap()) {
+                            tracing::info!(name = %name, read_only = mgr.read_only, "Opening database");
+                            let open_result = if mgr.read_only {
+                                let db_config = Config::persistent(db_file.to_str().unwrap())
+                                    .with_access_mode(AccessMode::ReadOnly);
+                                GrafeoDB::with_config(db_config)
+                            } else {
+                                GrafeoDB::open(db_file.to_str().unwrap())
+                            };
+                            match open_result {
                                 Ok(db) => {
                                     let metadata = DatabaseMetadata {
                                         database_type: format!("{}", db.graph_model()),
@@ -152,8 +162,13 @@ impl DatabaseManager {
                     .expect("failed to create default db directory");
                 let db_path = default_dir.join("grafeo.db");
                 tracing::info!("Creating default persistent database");
-                let db =
-                    GrafeoDB::open(db_path.to_str().unwrap()).expect("failed to create default db");
+                let db = if mgr.read_only {
+                    let db_config = Config::persistent(db_path.to_str().unwrap())
+                        .with_access_mode(AccessMode::ReadOnly);
+                    GrafeoDB::with_config(db_config).expect("failed to create default db")
+                } else {
+                    GrafeoDB::open(db_path.to_str().unwrap()).expect("failed to create default db")
+                };
                 mgr.databases.insert(
                     "default".to_string(),
                     Arc::new(DatabaseEntry {
@@ -187,6 +202,10 @@ impl DatabaseManager {
 
     /// Creates a new named database from a full request.
     pub fn create(&self, req: &CreateDatabaseRequest) -> Result<(), ServiceError> {
+        if self.read_only {
+            return Err(ServiceError::ReadOnly);
+        }
+
         let name = &req.name;
 
         if !is_valid_name(name) {
@@ -358,6 +377,10 @@ impl DatabaseManager {
     /// prevents resource contention if a new database is created immediately
     /// after deletion.
     pub fn delete(&self, name: &str) -> Result<(), ServiceError> {
+        if self.read_only {
+            return Err(ServiceError::ReadOnly);
+        }
+
         if name == "default" {
             return Err(ServiceError::BadRequest(
                 "cannot delete the default database".to_string(),
@@ -424,12 +447,75 @@ impl DatabaseManager {
         self.data_dir.as_deref()
     }
 
+    /// Returns whether the manager is in read-only mode.
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
     /// Returns the total memory allocated across all databases.
     pub fn total_allocated_memory(&self) -> usize {
         self.databases
             .iter()
             .filter_map(|e| e.value().db.memory_limit())
             .sum()
+    }
+
+    /// Collects Prometheus metrics from all database engines.
+    ///
+    /// Each metric line is labelled with `database="<name>"` so that
+    /// per-database breakdowns are available in Prometheus/Grafana.
+    /// Returns `None` when the `metrics` engine feature is not compiled in.
+    pub fn engine_prometheus_metrics(&self) -> Option<String> {
+        #[cfg(feature = "metrics")]
+        {
+            let mut output = String::new();
+            let mut seen_headers = std::collections::HashSet::new();
+            for entry in self.databases.iter() {
+                let name = entry.key();
+                let text = entry.value().db.metrics_prometheus();
+                if text.is_empty() {
+                    continue;
+                }
+                for line in text.lines() {
+                    if line.starts_with("# ") {
+                        // Deduplicate HELP/TYPE headers across databases
+                        if seen_headers.insert(line.to_string()) {
+                            output.push_str(line);
+                            output.push('\n');
+                        }
+                    } else if line.is_empty() {
+                        output.push('\n');
+                    } else {
+                        // Inject database label into metric lines
+                        // e.g. "grafeo_query_count 42" -> "grafeo_query_count{database=\"default\"} 42"
+                        // e.g. "grafeo_x{lang=\"gql\"} 1" -> "grafeo_x{database=\"default\",lang=\"gql\"} 1"
+                        if let Some(brace_pos) = line.find('{') {
+                            // Already has labels: insert database label after opening brace
+                            output.push_str(&line[..brace_pos + 1]);
+                            output.push_str(&format!("database=\"{name}\","));
+                            output.push_str(&line[brace_pos + 1..]);
+                        } else if let Some(space_pos) = line.find(' ') {
+                            // No labels: insert {database="name"} before the space
+                            output.push_str(&line[..space_pos]);
+                            output.push_str(&format!("{{database=\"{name}\"}}"));
+                            output.push_str(&line[space_pos..]);
+                        } else {
+                            output.push_str(line);
+                        }
+                        output.push('\n');
+                    }
+                }
+            }
+            if output.is_empty() {
+                None
+            } else {
+                Some(output)
+            }
+        }
+        #[cfg(not(feature = "metrics"))]
+        {
+            None
+        }
     }
 }
 
@@ -454,7 +540,7 @@ mod tests {
 
     #[test]
     fn test_in_memory_manager() {
-        let mgr = DatabaseManager::new(None);
+        let mgr = DatabaseManager::new(None, false);
         assert!(mgr.get("default").is_some());
 
         let req = CreateDatabaseRequest {
@@ -493,7 +579,7 @@ mod tests {
 
     #[test]
     fn test_delete_then_recreate() {
-        let mgr = DatabaseManager::new(None);
+        let mgr = DatabaseManager::new(None, false);
         let req = CreateDatabaseRequest {
             name: "ephemeral".to_string(),
             database_type: DatabaseType::Lpg,
@@ -517,7 +603,7 @@ mod tests {
 
     #[test]
     fn test_persistent_rejected_without_data_dir() {
-        let mgr = DatabaseManager::new(None);
+        let mgr = DatabaseManager::new(None, false);
         let req = CreateDatabaseRequest {
             name: "persist-test".to_string(),
             database_type: DatabaseType::Lpg,
