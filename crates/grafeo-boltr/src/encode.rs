@@ -77,6 +77,17 @@ pub fn grafeo_to_bolt(value: &grafeo_common::Value) -> BoltValue {
             .collect();
             BoltValue::Dict(dict)
         }
+        Value::GCounter(counters) => {
+            // Resolve to the total count for Bolt clients.
+            let total: u64 = counters.values().sum();
+            BoltValue::Integer(total as i64)
+        }
+        Value::PnCounter { pos, neg } => {
+            // Resolve to the net count for Bolt clients.
+            let pos_sum: u64 = pos.values().sum();
+            let neg_sum: u64 = neg.values().sum();
+            BoltValue::Integer(pos_sum as i64 - neg_sum as i64)
+        }
     }
 }
 

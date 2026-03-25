@@ -46,11 +46,15 @@ rustls = { version = "0.23", default-features = false, features = ["std", "tls12
 hyper = { version = "1", features = ["http1", "http2", "server"], optional = true }
 hyper-util = { version = "0.1", features = ["tokio", "server-auto"], optional = true }
 
+# HTTP client for replica polling (optional, replication feature)
+reqwest = { version = "0.13", features = ["json"], optional = true }
+
 [features]
 default = []
 auth = ["grafeo-service/auth"]
 sync = ["grafeo-service/sync"]
 push-changefeed = ["grafeo-service/push-changefeed", "sync"]
+replication = ["grafeo-service/replication", "dep:reqwest", "sync"]
 tls = ["dep:tokio-rustls", "dep:rustls", "dep:hyper", "dep:hyper-util"]
 
 [lints]

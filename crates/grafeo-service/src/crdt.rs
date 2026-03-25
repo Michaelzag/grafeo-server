@@ -55,8 +55,14 @@ pub fn merge(a: &Value, b: &Value) -> Value {
             Value::GCounter(result)
         }
         (
-            Value::PnCounter { pos: a_pos, neg: a_neg },
-            Value::PnCounter { pos: b_pos, neg: b_neg },
+            Value::PnCounter {
+                pos: a_pos,
+                neg: a_neg,
+            },
+            Value::PnCounter {
+                pos: b_pos,
+                neg: b_neg,
+            },
         ) => {
             let pos = merge_u64_maps(a_pos, b_pos);
             let neg = merge_u64_maps(a_neg, b_neg);
@@ -133,36 +139,51 @@ mod tests {
 
     #[test]
     fn gcounter_starts_at_zero() {
-        let val = apply_op(&Value::Null, &CrdtOp::GrowAdd {
-            amount: 0,
-            replica_id: "device-a".to_string(),
-        });
+        let val = apply_op(
+            &Value::Null,
+            &CrdtOp::GrowAdd {
+                amount: 0,
+                replica_id: "device-a".to_string(),
+            },
+        );
         assert_eq!(read(&val), 0);
     }
 
     #[test]
     fn gcounter_increments() {
-        let val = apply_op(&Value::Null, &CrdtOp::GrowAdd {
-            amount: 5,
-            replica_id: "device-a".to_string(),
-        });
-        let val = apply_op(&val, &CrdtOp::GrowAdd {
-            amount: 3,
-            replica_id: "device-b".to_string(),
-        });
+        let val = apply_op(
+            &Value::Null,
+            &CrdtOp::GrowAdd {
+                amount: 5,
+                replica_id: "device-a".to_string(),
+            },
+        );
+        let val = apply_op(
+            &val,
+            &CrdtOp::GrowAdd {
+                amount: 3,
+                replica_id: "device-b".to_string(),
+            },
+        );
         assert_eq!(read(&val), 8);
     }
 
     #[test]
     fn gcounter_merge_takes_max_per_replica() {
-        let a = apply_op(&Value::Null, &CrdtOp::GrowAdd {
-            amount: 5,
-            replica_id: "device-a".to_string(),
-        });
-        let b = apply_op(&Value::Null, &CrdtOp::GrowAdd {
-            amount: 3,
-            replica_id: "device-a".to_string(),
-        });
+        let a = apply_op(
+            &Value::Null,
+            &CrdtOp::GrowAdd {
+                amount: 5,
+                replica_id: "device-a".to_string(),
+            },
+        );
+        let b = apply_op(
+            &Value::Null,
+            &CrdtOp::GrowAdd {
+                amount: 3,
+                replica_id: "device-a".to_string(),
+            },
+        );
         let merged = merge(&a, &b);
         // Max per replica: device-a = 5.
         assert_eq!(read(&merged), 5);
@@ -170,40 +191,58 @@ mod tests {
 
     #[test]
     fn gcounter_merge_commutative() {
-        let a = apply_op(&Value::Null, &CrdtOp::GrowAdd {
-            amount: 7,
-            replica_id: "r1".to_string(),
-        });
-        let b = apply_op(&Value::Null, &CrdtOp::GrowAdd {
-            amount: 3,
-            replica_id: "r2".to_string(),
-        });
+        let a = apply_op(
+            &Value::Null,
+            &CrdtOp::GrowAdd {
+                amount: 7,
+                replica_id: "r1".to_string(),
+            },
+        );
+        let b = apply_op(
+            &Value::Null,
+            &CrdtOp::GrowAdd {
+                amount: 3,
+                replica_id: "r2".to_string(),
+            },
+        );
         assert_eq!(read(&merge(&a, &b)), read(&merge(&b, &a)));
     }
 
     #[test]
     fn pncounter_increment_and_decrement() {
-        let val = apply_op(&Value::Null, &CrdtOp::Increment {
-            amount: 10,
-            replica_id: "device-a".to_string(),
-        });
-        let val = apply_op(&val, &CrdtOp::Increment {
-            amount: -3,
-            replica_id: "device-a".to_string(),
-        });
+        let val = apply_op(
+            &Value::Null,
+            &CrdtOp::Increment {
+                amount: 10,
+                replica_id: "device-a".to_string(),
+            },
+        );
+        let val = apply_op(
+            &val,
+            &CrdtOp::Increment {
+                amount: -3,
+                replica_id: "device-a".to_string(),
+            },
+        );
         assert_eq!(read(&val), 7);
     }
 
     #[test]
     fn pncounter_merge_commutative() {
-        let a = apply_op(&Value::Null, &CrdtOp::Increment {
-            amount: 10,
-            replica_id: "r1".to_string(),
-        });
-        let b = apply_op(&Value::Null, &CrdtOp::Increment {
-            amount: -2,
-            replica_id: "r2".to_string(),
-        });
+        let a = apply_op(
+            &Value::Null,
+            &CrdtOp::Increment {
+                amount: 10,
+                replica_id: "r1".to_string(),
+            },
+        );
+        let b = apply_op(
+            &Value::Null,
+            &CrdtOp::Increment {
+                amount: -2,
+                replica_id: "r2".to_string(),
+            },
+        );
         assert_eq!(read(&merge(&a, &b)), read(&merge(&b, &a)));
     }
 }

@@ -1348,6 +1348,7 @@ dependencies = [
  "grafeo-service",
  "hyper",
  "hyper-util",
+ "reqwest 0.13.2",
  "rustls",
  "serde",
  "serde_json",
@@ -1424,6 +1425,7 @@ dependencies = [
 name = "grafeo-sync"
 version = "0.4.8"
 dependencies = [
+ "axum",
  "grafeo-service",
  "reqwest 0.13.2",
  "serde",

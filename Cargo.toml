@@ -131,6 +131,7 @@ hybrid-search = ["grafeo-service/hybrid-search"]
 cdc = ["grafeo-service/cdc"]
 sync = ["grafeo-http?/sync"]
 push-changefeed = ["grafeo-http?/push-changefeed"]
+replication = ["grafeo-http?/replication"]
 embed = ["grafeo-service/embed"]
 ai = ["vector-index", "text-index", "hybrid-search", "cdc"]
 
@@ -152,7 +153,7 @@ rdf = ["grafeo-service/rdf"]
 full = [
     "http", "studio", "all-languages", "algos", "ai", "rdf", "storage", "embed",
     "owl-schema", "rdfs-schema", "json-schema", "auth", "tls", "gwp", "bolt",
-    "temporal", "import", "metrics", "sync",
+    "temporal", "import", "metrics", "sync", "push-changefeed", "replication",
 ]
 
 [dependencies]

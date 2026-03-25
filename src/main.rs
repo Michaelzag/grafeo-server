@@ -29,6 +29,22 @@ async fn main() {
         tracing_subscriber::fmt().with_env_filter(env_filter).init();
     }
 
+    #[cfg(feature = "replication")]
+    let replication_mode = {
+        use grafeo_service::replication::ReplicationMode;
+        match config.replication_mode.as_str() {
+            "primary" => ReplicationMode::Primary,
+            "replica" => {
+                let url = config.primary_url.clone().unwrap_or_else(|| {
+                    tracing::warn!("--replication-mode=replica requires --primary-url; defaulting to http://localhost:7474");
+                    "http://localhost:7474".to_string()
+                });
+                ReplicationMode::Replica { primary_url: url }
+            }
+            _ => ReplicationMode::Standalone,
+        }
+    };
+
     let service_config = ServiceConfig {
         data_dir: config.data_dir.clone(),
         read_only: config.read_only,
@@ -42,6 +58,8 @@ async fn main() {
         auth_user: config.auth_user.clone(),
         #[cfg(feature = "auth")]
         auth_password: config.auth_password.clone(),
+        #[cfg(feature = "replication")]
+        replication_mode,
     };
 
     let service = ServiceState::new(&service_config);
@@ -69,6 +87,10 @@ async fn main() {
             cleanup_state.cleanup_rate_limits();
         }
     });
+
+    // Spawn replication background task (no-op unless in Replica mode)
+    #[cfg(feature = "replication")]
+    grafeo_http::replication_task::start(service.clone());
 
     // -----------------------------------------------------------------
     // Standalone mode: GWP and/or BoltR only (no HTTP)

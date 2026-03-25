@@ -387,9 +387,7 @@ impl SyncService {
                     };
 
                     // CRDT path: apply counter operation directly, bypassing LWW.
-                    if let (Some(op), Some(prop_key)) =
-                        (&change.crdt_op, &change.crdt_property)
-                    {
+                    if let (Some(op), Some(prop_key)) = (&change.crdt_op, &change.crdt_property) {
                         match change.entity_type.as_str() {
                             "node" => {
                                 let node_id = NodeId::new(raw_id);
@@ -414,10 +412,7 @@ impl SyncService {
                             _ => {
                                 conflicts.push(ConflictRecord {
                                     request_index: idx,
-                                    reason: format!(
-                                        "unknown_entity_type:{}",
-                                        change.entity_type
-                                    ),
+                                    reason: format!("unknown_entity_type:{}", change.entity_type),
                                 });
                             }
                         }
@@ -795,6 +790,8 @@ mod tests {
                 src_id: None,
                 dst_id: None,
                 after: None,
+                crdt_op: None,
+                crdt_property: None,
             }],
             schema_version: None,
         };
@@ -826,6 +823,8 @@ mod tests {
                 src_id: None,
                 dst_id: None,
                 after: Some(serde_json::json!({ "name": { "String": "Alix" } })),
+                crdt_op: None,
+                crdt_property: None,
             }],
             schema_version: None,
         };
@@ -860,6 +859,8 @@ mod tests {
                 src_id: None,
                 dst_id: None,
                 after: None,
+                crdt_op: None,
+                crdt_property: None,
             }],
             schema_version: None,
         };
@@ -893,6 +894,8 @@ mod tests {
                 src_id: None,
                 dst_id: None,
                 after: Some(serde_json::json!({ "name": { "String": "Stale" } })),
+                crdt_op: None,
+                crdt_property: None,
             }],
             schema_version: None,
         };

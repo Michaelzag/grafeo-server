@@ -14,17 +14,19 @@ pub mod admin;
 pub mod auth;
 #[cfg(feature = "push-changefeed")]
 pub mod changefeed;
+#[cfg(feature = "sync")]
+pub mod crdt;
 pub mod database;
 pub mod error;
 pub mod metrics;
 pub mod query;
 pub mod rate_limit;
+#[cfg(feature = "replication")]
+pub mod replication;
 pub mod schema;
 pub mod search;
 pub mod session;
 pub mod stream;
-#[cfg(feature = "sync")]
-pub mod crdt;
 #[cfg(feature = "sync")]
 pub mod sync;
 pub mod types;
@@ -55,6 +57,8 @@ pub struct ServiceConfig {
     pub auth_user: Option<String>,
     #[cfg(feature = "auth")]
     pub auth_password: Option<String>,
+    #[cfg(feature = "replication")]
+    pub replication_mode: replication::ReplicationMode,
 }
 
 /// Shared service state, cloneable across all transport handlers.
@@ -79,6 +83,10 @@ struct Inner {
     auth: Option<auth::AuthProvider>,
     #[cfg(feature = "push-changefeed")]
     change_hub: changefeed::ChangeHub,
+    #[cfg(feature = "replication")]
+    replication_mode: replication::ReplicationMode,
+    #[cfg(feature = "replication")]
+    replication_state: Arc<replication::ReplicationState>,
 }
 
 impl ServiceState {
@@ -105,6 +113,10 @@ impl ServiceState {
                 ),
                 #[cfg(feature = "push-changefeed")]
                 change_hub: changefeed::ChangeHub::new(),
+                #[cfg(feature = "replication")]
+                replication_mode: config.replication_mode.clone(),
+                #[cfg(feature = "replication")]
+                replication_state: Arc::new(replication::ReplicationState::new()),
             }),
         }
     }
@@ -125,6 +137,10 @@ impl ServiceState {
                 auth: None,
                 #[cfg(feature = "push-changefeed")]
                 change_hub: changefeed::ChangeHub::new(),
+                #[cfg(feature = "replication")]
+                replication_mode: replication::ReplicationMode::Standalone,
+                #[cfg(feature = "replication")]
+                replication_state: Arc::new(replication::ReplicationState::new()),
             }),
         }
     }
@@ -145,6 +161,10 @@ impl ServiceState {
                 auth: auth::AuthProvider::new(Some(auth_token), None, None),
                 #[cfg(feature = "push-changefeed")]
                 change_hub: changefeed::ChangeHub::new(),
+                #[cfg(feature = "replication")]
+                replication_mode: replication::ReplicationMode::Standalone,
+                #[cfg(feature = "replication")]
+                replication_state: Arc::new(replication::ReplicationState::new()),
             }),
         }
     }
@@ -165,6 +185,10 @@ impl ServiceState {
                 auth: auth::AuthProvider::new(None, Some(user), Some(password)),
                 #[cfg(feature = "push-changefeed")]
                 change_hub: changefeed::ChangeHub::new(),
+                #[cfg(feature = "replication")]
+                replication_mode: replication::ReplicationMode::Standalone,
+                #[cfg(feature = "replication")]
+                replication_state: Arc::new(replication::ReplicationState::new()),
             }),
         }
     }
@@ -185,6 +209,10 @@ impl ServiceState {
                 auth: None,
                 #[cfg(feature = "push-changefeed")]
                 change_hub: changefeed::ChangeHub::new(),
+                #[cfg(feature = "replication")]
+                replication_mode: replication::ReplicationMode::Standalone,
+                #[cfg(feature = "replication")]
+                replication_state: Arc::new(replication::ReplicationState::new()),
             }),
         }
     }
@@ -209,6 +237,10 @@ impl ServiceState {
                 auth: None,
                 #[cfg(feature = "push-changefeed")]
                 change_hub: changefeed::ChangeHub::new(),
+                #[cfg(feature = "replication")]
+                replication_mode: replication::ReplicationMode::Standalone,
+                #[cfg(feature = "replication")]
+                replication_state: Arc::new(replication::ReplicationState::new()),
             }),
         }
     }
@@ -255,6 +287,24 @@ impl ServiceState {
     #[cfg(feature = "auth")]
     pub fn auth(&self) -> Option<&auth::AuthProvider> {
         self.inner.auth.as_ref()
+    }
+
+    /// Returns `true` if this instance is a read-only replica.
+    #[cfg(feature = "replication")]
+    pub fn is_replica(&self) -> bool {
+        self.inner.replication_mode.is_replica()
+    }
+
+    /// Returns the replication mode for this instance.
+    #[cfg(feature = "replication")]
+    pub fn replication_mode(&self) -> &replication::ReplicationMode {
+        &self.inner.replication_mode
+    }
+
+    /// Returns the shared replication state (epoch tracking, errors).
+    #[cfg(feature = "replication")]
+    pub fn replication_state(&self) -> &Arc<replication::ReplicationState> {
+        &self.inner.replication_state
     }
 
     #[cfg(feature = "auth")]

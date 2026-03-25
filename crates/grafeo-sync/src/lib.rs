@@ -156,6 +156,7 @@ impl SyncClient {
             client_id: self.client_id.clone(),
             last_seen_epoch: self.last_epoch(),
             changes,
+            schema_version: None,
         };
 
         let resp = self
@@ -187,5 +188,224 @@ impl SyncClient {
         let pulled = self.pull(1_000).await?;
         let pushed = self.push(local_changes).await?;
         Ok((pulled, pushed))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::SocketAddr;
+
+    use axum::Router;
+    use axum::extract::{Path, Query};
+    use axum::response::Json;
+    use axum::routing::{get, post};
+    use grafeo_service::sync::{ChangesResponse, SyncRequest, SyncResponse};
+    use serde::Deserialize;
+    use tokio::net::TcpListener;
+
+    use super::*;
+
+    // ---------------------------------------------------------------------------
+    // Minimal mock HTTP server
+    // ---------------------------------------------------------------------------
+
+    #[derive(Deserialize)]
+    struct SinceQuery {
+        #[serde(default)]
+        since: u64,
+    }
+
+    async fn mock_changes(
+        Path(_name): Path<String>,
+        Query(q): Query<SinceQuery>,
+    ) -> Json<ChangesResponse> {
+        Json(ChangesResponse {
+            server_epoch: q.since + 10,
+            changes: vec![],
+        })
+    }
+
+    async fn mock_sync(
+        Path(_name): Path<String>,
+        Json(req): Json<SyncRequest>,
+    ) -> Json<SyncResponse> {
+        Json(SyncResponse {
+            server_epoch: req.last_seen_epoch + 5,
+            applied: req.changes.len(),
+            skipped: 0,
+            conflicts: vec![],
+            id_mappings: vec![],
+            schema_mismatch: false,
+            server_schema_version: "abc123".to_string(),
+        })
+    }
+
+    async fn mock_error(Path(_name): Path<String>) -> axum::http::StatusCode {
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    }
+
+    async fn spawn_mock_server() -> String {
+        let app = Router::new()
+            .route("/db/{name}/changes", get(mock_changes))
+            .route("/db/{name}/sync", post(mock_sync));
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr: SocketAddr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        format!("http://{addr}")
+    }
+
+    async fn spawn_error_server() -> String {
+        let app = Router::new()
+            .route("/db/{name}/changes", get(mock_error))
+            .route("/db/{name}/sync", post(mock_error));
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr: SocketAddr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        format!("http://{addr}")
+    }
+
+    // ---------------------------------------------------------------------------
+    // Constructor / epoch helpers (no server needed)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn new_parses_valid_url() {
+        let client = SyncClient::new("http://localhost:7474", "default", "dev-1");
+        assert!(client.is_ok());
+        let client = client.unwrap();
+        assert_eq!(client.client_id, "dev-1");
+        assert_eq!(client.last_epoch(), 0);
+    }
+
+    #[test]
+    fn new_rejects_invalid_url() {
+        let result = SyncClient::new("not a url", "default", "dev-1");
+        assert!(matches!(result, Err(SyncError::InvalidUrl(_))));
+    }
+
+    #[test]
+    fn with_epoch_sets_starting_epoch() {
+        let client = SyncClient::new("http://localhost:7474", "default", "dev-1")
+            .unwrap()
+            .with_epoch(42);
+        assert_eq!(client.last_epoch(), 42);
+    }
+
+    #[test]
+    fn advance_epoch_moves_forward() {
+        let client = SyncClient::new("http://localhost:7474", "default", "dev-1").unwrap();
+        client.advance_epoch(10);
+        assert_eq!(client.last_epoch(), 10);
+        client.advance_epoch(20);
+        assert_eq!(client.last_epoch(), 20);
+    }
+
+    #[test]
+    fn advance_epoch_does_not_go_backward() {
+        let client = SyncClient::new("http://localhost:7474", "default", "dev-1").unwrap();
+        client.advance_epoch(50);
+        client.advance_epoch(10); // should be ignored
+        assert_eq!(client.last_epoch(), 50);
+    }
+
+    #[test]
+    fn clone_shares_epoch_counter() {
+        let a = SyncClient::new("http://localhost:7474", "default", "dev-1").unwrap();
+        let b = a.clone();
+        a.advance_epoch(99);
+        assert_eq!(b.last_epoch(), 99);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Pull
+    // ---------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn pull_returns_changes_response() {
+        let base = spawn_mock_server().await;
+        let client = SyncClient::new(&base, "default", "dev-1").unwrap();
+
+        let resp = client.pull(100).await.unwrap();
+        assert_eq!(resp.server_epoch, 10); // since=0, mock returns 0+10
+        assert!(resp.changes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn pull_uses_last_epoch_as_since() {
+        let base = spawn_mock_server().await;
+        let client = SyncClient::new(&base, "default", "dev-1")
+            .unwrap()
+            .with_epoch(7);
+
+        let resp = client.pull(100).await.unwrap();
+        assert_eq!(resp.server_epoch, 17); // since=7, mock returns 7+10
+    }
+
+    #[tokio::test]
+    async fn pull_returns_server_error() {
+        let base = spawn_error_server().await;
+        let client = SyncClient::new(&base, "default", "dev-1").unwrap();
+
+        let err = client.pull(100).await.unwrap_err();
+        assert!(matches!(err, SyncError::ServerError { status: 500, .. }));
+    }
+
+    // ---------------------------------------------------------------------------
+    // Push
+    // ---------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn push_empty_changeset_succeeds() {
+        let base = spawn_mock_server().await;
+        let client = SyncClient::new(&base, "default", "dev-1").unwrap();
+
+        let resp = client.push(vec![]).await.unwrap();
+        assert_eq!(resp.applied, 0);
+        assert_eq!(resp.skipped, 0);
+        assert_eq!(resp.server_epoch, 5); // last_epoch=0, mock returns 0+5
+    }
+
+    #[tokio::test]
+    async fn push_sends_client_id_and_epoch() {
+        let base = spawn_mock_server().await;
+        let client = SyncClient::new(&base, "default", "dev-1")
+            .unwrap()
+            .with_epoch(3);
+
+        let resp = client.push(vec![]).await.unwrap();
+        assert_eq!(resp.server_epoch, 8); // last_seen_epoch=3, mock returns 3+5
+    }
+
+    #[tokio::test]
+    async fn push_returns_server_error() {
+        let base = spawn_error_server().await;
+        let client = SyncClient::new(&base, "default", "dev-1").unwrap();
+
+        let err = client.push(vec![]).await.unwrap_err();
+        assert!(matches!(err, SyncError::ServerError { status: 500, .. }));
+    }
+
+    // ---------------------------------------------------------------------------
+    // Sync (pull + push)
+    // ---------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn sync_returns_both_responses() {
+        let base = spawn_mock_server().await;
+        let client = SyncClient::new(&base, "default", "dev-1").unwrap();
+
+        let (pulled, pushed) = client.sync(vec![]).await.unwrap();
+        assert_eq!(pulled.server_epoch, 10);
+        assert_eq!(pushed.applied, 0);
     }
 }

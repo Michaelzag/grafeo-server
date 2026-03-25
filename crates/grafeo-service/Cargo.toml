@@ -86,6 +86,8 @@ json-schema = ["dep:jsonschema"]
 sync = ["cdc"]
 # Push-based SSE/WebSocket changefeed (requires sync)
 push-changefeed = ["sync"]
+# Primary-replica replication via CDC changefeed (requires sync)
+replication = ["sync"]
 
 # Auth provider
 auth = ["dep:subtle"]
