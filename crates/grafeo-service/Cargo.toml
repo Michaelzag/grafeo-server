@@ -74,6 +74,9 @@ temporal = ["grafeo-engine/temporal"]
 # Engine: metrics
 metrics = ["grafeo-engine/metrics"]
 
+# Engine: observability (tracing spans and events)
+tracing = ["grafeo-engine/tracing"]
+
 # Engine: data models
 rdf = ["grafeo-engine/rdf"]
 
@@ -81,6 +84,13 @@ rdf = ["grafeo-engine/rdf"]
 owl-schema = ["dep:sophia_turtle", "dep:sophia_api", "dep:sophia_inmem"]
 rdfs-schema = ["owl-schema"]
 json-schema = ["dep:jsonschema"]
+
+# Sync: pull-based changefeed for offline-first applications
+sync = ["cdc"]
+# Push-based SSE/WebSocket changefeed (requires sync)
+push-changefeed = ["sync"]
+# Primary-replica replication via CDC changefeed (requires sync)
+replication = ["sync"]
 
 # Auth provider
 auth = ["dep:subtle"]

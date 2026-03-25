@@ -94,6 +94,16 @@ pub struct Config {
     /// Path to TLS private key file (PEM format). Requires --tls-cert.
     #[arg(long, env = "GRAFEO_TLS_KEY", requires = "tls_cert")]
     pub tls_key: Option<String>,
+
+    /// Replication mode: "standalone" (default), "primary", or "replica".
+    #[cfg(feature = "replication")]
+    #[arg(long, default_value = "standalone", env = "GRAFEO_REPLICATION_MODE")]
+    pub replication_mode: String,
+
+    /// Primary base URL when running in replica mode (e.g. http://primary:7474).
+    #[cfg(feature = "replication")]
+    #[arg(long, env = "GRAFEO_PRIMARY_URL")]
+    pub primary_url: Option<String>,
 }
 
 impl Config {

@@ -13,6 +13,8 @@
 pub mod encode;
 pub mod error;
 pub mod middleware;
+#[cfg(feature = "replication")]
+pub mod replication_task;
 pub mod routes;
 pub mod state;
 #[cfg(feature = "tls")]
@@ -182,9 +184,37 @@ pub fn router(state: AppState) -> Router {
         // System
         .route("/health", get(routes::system::health))
         .route("/system/resources", get(routes::system::system_resources))
-        .route("/metrics", get(routes::system::metrics_endpoint))
+        .route("/metrics", get(routes::system::metrics_endpoint));
+
+    // Sync: offline-first changefeed + apply (requires `sync` feature, implies `cdc`)
+    #[cfg(feature = "sync")]
+    let api = api
+        .route("/db/{name}/changes", get(routes::sync::db_changes))
+        .route("/db/{name}/sync", post(routes::sync::db_apply));
+
+    // Sync: SSE push stream (requires `push-changefeed` feature)
+    #[cfg(feature = "push-changefeed")]
+    let api = api.route(
+        "/db/{name}/changes/stream",
+        get(routes::sync::db_changes_stream),
+    );
+
+    // Replication status endpoint (requires `replication` feature)
+    #[cfg(feature = "replication")]
+    let api = api.route(
+        "/admin/replication",
+        get(routes::replication::get_replication_status),
+    );
+
+    let api = api
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http());
+
+    #[cfg(feature = "replication")]
+    let api = api.layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        middleware::replica_guard::replica_guard_middleware,
+    ));
 
     #[cfg(feature = "auth")]
     let api = api.layer(axum::middleware::from_fn_with_state(

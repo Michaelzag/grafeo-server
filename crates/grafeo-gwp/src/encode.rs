@@ -84,6 +84,46 @@ pub fn grafeo_to_gwp(value: &grafeo_common::Value) -> GwpValue {
             ];
             GwpValue::Record(gwp::types::Record { fields })
         }
+        Value::GCounter(counts) => {
+            let total: u64 = counts.values().sum();
+            let mut fields: Vec<gwp::types::Field> = counts
+                .iter()
+                .map(|(k, v)| gwp::types::Field {
+                    name: k.clone(),
+                    value: GwpValue::Integer(*v as i64),
+                })
+                .collect();
+            fields.sort_by(|a, b| a.name.cmp(&b.name));
+            let replicas = GwpValue::Record(gwp::types::Record { fields });
+            GwpValue::Record(gwp::types::Record {
+                fields: vec![
+                    gwp::types::Field {
+                        name: "$gcounter".to_string(),
+                        value: replicas,
+                    },
+                    gwp::types::Field {
+                        name: "$value".to_string(),
+                        value: GwpValue::Integer(total as i64),
+                    },
+                ],
+            })
+        }
+        Value::OnCounter { pos, neg } => {
+            let pos_sum: i64 = pos.values().copied().map(|v| v as i64).sum();
+            let neg_sum: i64 = neg.values().copied().map(|v| v as i64).sum();
+            GwpValue::Record(gwp::types::Record {
+                fields: vec![
+                    gwp::types::Field {
+                        name: "$pncounter".to_string(),
+                        value: GwpValue::Boolean(true),
+                    },
+                    gwp::types::Field {
+                        name: "$value".to_string(),
+                        value: GwpValue::Integer(pos_sum - neg_sum),
+                    },
+                ],
+            })
+        }
     }
 }
 

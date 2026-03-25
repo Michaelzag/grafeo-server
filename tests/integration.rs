@@ -14,8 +14,14 @@ use tokio_tungstenite::tungstenite;
 /// Boots an in-memory Grafeo server on an OS-assigned port.
 /// Returns the base URL (e.g. "http://127.0.0.1:12345").
 async fn spawn_server() -> String {
-    // Inline the same setup as main.rs but with in-memory config
-    let state = grafeo_server::AppState::new_in_memory(300);
+    spawn_server_from_state(grafeo_server::AppState::new_in_memory(300)).await
+}
+
+/// Boots a server from a pre-configured `AppState`.
+///
+/// Use this when you need to seed the database before the server starts
+/// (e.g. to populate the CDC log via the direct API before testing sync).
+async fn spawn_server_from_state(state: grafeo_server::AppState) -> String {
     let mut app = grafeo_server::router(state);
 
     #[cfg(feature = "studio")]
@@ -2870,7 +2876,7 @@ async fn bolt_transaction_commit() {
 
     // Begin transaction, create a node, commit
     session.begin().await.unwrap();
-    session.run("CREATE (:BoltTxTest {val: 42})").await.unwrap();
+    let _ = session.run("CREATE (:BoltTxTest {val: 42})").await.unwrap();
     session.commit().await.unwrap();
 
     // Verify committed data is visible
@@ -2894,7 +2900,7 @@ async fn bolt_transaction_rollback() {
 
     // Begin transaction, create a node, rollback
     session.begin().await.unwrap();
-    session.run("CREATE (:BoltRbTest {val: 99})").await.unwrap();
+    let _ = session.run("CREATE (:BoltRbTest {val: 99})").await.unwrap();
     session.rollback().await.unwrap();
 
     // Verify rolled-back data is NOT visible
@@ -2946,7 +2952,7 @@ async fn bolt_query_with_parameters() {
         boltr::types::BoltValue::String("Charlie".to_string()),
     );
 
-    session
+    let _ = session
         .run_with_params(
             "CREATE (:BoltParamTest {name: $name})",
             params,
@@ -2996,9 +3002,9 @@ async fn bolt_multiple_queries_in_session() {
         .unwrap();
 
     // Run multiple queries on the same session
-    session.run("CREATE (:BoltMulti {seq: 1})").await.unwrap();
-    session.run("CREATE (:BoltMulti {seq: 2})").await.unwrap();
-    session.run("CREATE (:BoltMulti {seq: 3})").await.unwrap();
+    let _ = session.run("CREATE (:BoltMulti {seq: 1})").await.unwrap();
+    let _ = session.run("CREATE (:BoltMulti {seq: 2})").await.unwrap();
+    let _ = session.run("CREATE (:BoltMulti {seq: 3})").await.unwrap();
 
     let result = session
         .run("MATCH (n:BoltMulti) RETURN n.seq ORDER BY n.seq")
@@ -3068,7 +3074,7 @@ async fn bolt_database_switching() {
         "db".to_string(),
         boltr::types::BoltValue::String("bolt-switch-db".to_string()),
     )]);
-    session
+    let _ = session
         .run_with_params(
             "CREATE (:SwitchTest {name: 'A'})",
             std::collections::HashMap::new(),
@@ -3116,7 +3122,7 @@ async fn bolt_language_dispatch() {
         .unwrap();
 
     // Seed some data first (auto-detected as Cypher)
-    session.run("CREATE (:LangTest {val: 1})").await.unwrap();
+    let _ = session.run("CREATE (:LangTest {val: 1})").await.unwrap();
 
     // Run a Cypher query using the language extension
     let cypher_extra = boltr::types::BoltDict::from([(
@@ -4148,4 +4154,755 @@ async fn e2e_metrics_reflect_activity() {
 
     // Error counter
     assert!(body.contains("grafeo_query_errors_total{language=\"gql\"}"));
+}
+
+// ===========================================================================
+// Offline-first sync: HTTP round-trip (v0.4.9)
+// ===========================================================================
+
+/// Boots a server from a pre-seeded state, pulls its changefeed via HTTP,
+/// then pushes those changes to a second fresh server and verifies the result.
+///
+/// This test exercises the full client workflow:
+///   1. Seed nodes via the direct API (populates CDC log)
+///   2. Pull `GET /db/default/changes?since=0`
+///   3. Convert `ChangeEventDto` → `SyncChangeRequest`
+///   4. Push `POST /db/default/sync` to a second server
+///   5. Verify `applied`, `id_mappings`, and lack of conflicts
+#[cfg(feature = "sync")]
+#[tokio::test]
+async fn sync_round_trip_two_databases() {
+    // --- Server A: seed 3 Person nodes via direct API ---
+    let state_a = grafeo_server::AppState::new_in_memory(300);
+    {
+        let entry = state_a.databases().get("default").unwrap();
+        entry.db.create_node(&["Person"]);
+        entry.db.create_node(&["Person"]);
+        entry.db.create_node(&["Person"]);
+    }
+    let base_a = spawn_server_from_state(state_a).await;
+
+    // --- Pull changefeed from server A ---
+    let client = Client::new();
+    let pull_resp = client
+        .get(format!("{base_a}/db/default/changes?since=0"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(pull_resp.status(), 200);
+
+    let pull_body: Value = pull_resp.json().await.unwrap();
+    let changes = pull_body["changes"].as_array().unwrap();
+
+    // 3 node create events
+    assert_eq!(changes.len(), 3);
+    assert!(changes.iter().all(|e| e["kind"] == "create"));
+    assert!(changes.iter().all(|e| e["entity_type"] == "node"));
+    assert!(changes.iter().all(|e| {
+        e["labels"]
+            .as_array()
+            .is_some_and(|ls| ls.contains(&Value::String("Person".into())))
+    }));
+
+    let server_epoch = pull_body["server_epoch"].as_u64().unwrap();
+
+    // --- Convert ChangeEventDto → SyncChangeRequest (node creates) ---
+    let sync_changes: Vec<Value> = changes
+        .iter()
+        .map(|e| {
+            json!({
+                "kind":        "create",
+                "entity_type": "node",
+                "labels":      e["labels"],
+                "after":       e["after"],
+                "timestamp":   e["timestamp"],
+            })
+        })
+        .collect();
+
+    let sync_req = json!({
+        "client_id":       "test-round-trip",
+        "last_seen_epoch": server_epoch,
+        "changes":         sync_changes,
+    });
+
+    // --- Apply to server B (fresh, empty) ---
+    let base_b = spawn_server().await;
+    let apply_resp = client
+        .post(format!("{base_b}/db/default/sync"))
+        .json(&sync_req)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(apply_resp.status(), 200);
+
+    let apply_body: Value = apply_resp.json().await.unwrap();
+
+    // All 3 creates applied, no conflicts
+    assert_eq!(apply_body["applied"], 3);
+    assert_eq!(apply_body["skipped"], 0);
+    assert!(apply_body["conflicts"].as_array().unwrap().is_empty());
+
+    // Server B assigned a new ID for each create
+    let mappings = apply_body["id_mappings"].as_array().unwrap();
+    assert_eq!(mappings.len(), 3);
+    for (idx, mapping) in mappings.iter().enumerate() {
+        assert_eq!(mapping["request_index"].as_u64().unwrap(), idx as u64);
+        assert!(mapping["server_id"].as_u64().is_some());
+        assert_ne!(mapping["server_id"].as_u64().unwrap(), u64::MAX);
+    }
+
+    // server_epoch in the apply response should be non-zero (writes advanced epoch)
+    assert!(apply_body["server_epoch"].as_u64().is_some());
+}
+
+/// Sync: edge creates require remapping src/dst IDs via id_mappings before pushing.
+///
+/// Creates two Person nodes and a KNOWS edge on server A, pulls the changefeed,
+/// pushes the node creates to server B, remaps the edge endpoints using the
+/// returned id_mappings, then pushes the edge create and verifies it lands.
+#[cfg(feature = "sync")]
+#[tokio::test]
+async fn sync_with_edge_creates() {
+    let state_a = grafeo_server::AppState::new_in_memory(300);
+    let (alix_raw, gus_raw) = {
+        let entry = state_a.databases().get("default").unwrap();
+        let alix = entry.db.create_node(&["Person"]);
+        let gus = entry.db.create_node(&["Person"]);
+        entry.db.create_edge(alix, gus, "KNOWS");
+        (alix.as_u64(), gus.as_u64())
+    };
+    let base_a = spawn_server_from_state(state_a).await;
+
+    let client = Client::new();
+    let pull: Value = client
+        .get(format!("{base_a}/db/default/changes?since=0"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let changes = pull["changes"].as_array().unwrap();
+    assert_eq!(changes.len(), 3, "expected 2 node + 1 edge create events");
+
+    let node_changes: Vec<&Value> = changes
+        .iter()
+        .filter(|e| e["entity_type"] == "node")
+        .collect();
+    let edge_changes: Vec<&Value> = changes
+        .iter()
+        .filter(|e| e["entity_type"] == "edge")
+        .collect();
+    assert_eq!(node_changes.len(), 2);
+    assert_eq!(edge_changes.len(), 1);
+
+    // Push node creates to server B; collect id_mappings.
+    let base_b = spawn_server().await;
+    let node_req = json!({
+        "client_id": "test-edge-sync",
+        "last_seen_epoch": 0u64,
+        "changes": node_changes.iter().map(|e| json!({
+            "kind": "create",
+            "entity_type": "node",
+            "labels": e["labels"],
+            "after": e["after"],
+            "timestamp": e["timestamp"],
+        })).collect::<Vec<_>>(),
+    });
+    let node_resp: Value = client
+        .post(format!("{base_b}/db/default/sync"))
+        .json(&node_req)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(node_resp["applied"], 2);
+    let node_mappings = node_resp["id_mappings"].as_array().unwrap();
+    assert_eq!(node_mappings.len(), 2);
+
+    // Build server-A-ID -> server-B-ID map.
+    let a_node_ids: Vec<u64> = node_changes
+        .iter()
+        .map(|e| e["id"].as_u64().unwrap())
+        .collect();
+    let mut a_to_b: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
+    for m in node_mappings {
+        let idx = m["request_index"].as_u64().unwrap() as usize;
+        a_to_b.insert(a_node_ids[idx], m["server_id"].as_u64().unwrap());
+    }
+    assert!(a_to_b.contains_key(&alix_raw));
+    assert!(a_to_b.contains_key(&gus_raw));
+
+    // Remap edge endpoints and push.
+    let edge = edge_changes[0];
+    let src_b = a_to_b[&edge["src_id"].as_u64().unwrap()];
+    let dst_b = a_to_b[&edge["dst_id"].as_u64().unwrap()];
+    let edge_req = json!({
+        "client_id": "test-edge-sync",
+        "last_seen_epoch": node_resp["server_epoch"],
+        "changes": [{
+            "kind": "create",
+            "entity_type": "edge",
+            "edge_type": edge["edge_type"],
+            "src_id": src_b,
+            "dst_id": dst_b,
+            "timestamp": edge["timestamp"],
+        }],
+    });
+    let edge_resp: Value = client
+        .post(format!("{base_b}/db/default/sync"))
+        .json(&edge_req)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(edge_resp["applied"], 1);
+    assert!(edge_resp["conflicts"].as_array().unwrap().is_empty());
+    let edge_mappings = edge_resp["id_mappings"].as_array().unwrap();
+    assert_eq!(edge_mappings.len(), 1);
+    assert!(edge_mappings[0]["server_id"].as_u64().is_some());
+}
+
+/// Sync: property updates and node deletes are applied correctly.
+///
+/// Seeds two nodes on server B directly. Pushes an update (property delta) for
+/// the first and a delete for the second using future-dated timestamps to avoid
+/// LWW conflicts. Verifies both are applied with no conflicts.
+#[cfg(feature = "sync")]
+#[tokio::test]
+async fn sync_updates_and_deletes() {
+    let state_b = grafeo_server::AppState::new_in_memory(300);
+    let (n1, n2) = {
+        let entry = state_b.databases().get("default").unwrap();
+        let n1 = entry.db.create_node(&["Device"]).as_u64();
+        let n2 = entry.db.create_node(&["Device"]).as_u64();
+        (n1, n2)
+    };
+    let base_b = spawn_server_from_state(state_b).await;
+
+    // Use a timestamp well in the future so LWW never fires.
+    let future_ts = u64::MAX / 2;
+
+    let client = Client::new();
+    let sync_req = json!({
+        "client_id": "test-upd-del",
+        "last_seen_epoch": 0u64,
+        "changes": [
+            {
+                "kind": "update",
+                "entity_type": "node",
+                "id": n1,
+                "after": {"status": {"String": "active"}},
+                "timestamp": future_ts,
+            },
+            {
+                "kind": "delete",
+                "entity_type": "node",
+                "id": n2,
+                "timestamp": future_ts,
+            },
+        ],
+    });
+    let resp: Value = client
+        .post(format!("{base_b}/db/default/sync"))
+        .json(&sync_req)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(resp["applied"], 2);
+    assert_eq!(resp["skipped"], 0);
+    assert!(resp["conflicts"].as_array().unwrap().is_empty());
+    // No creates, so no id_mappings.
+    assert!(resp["id_mappings"].as_array().unwrap().is_empty());
+}
+
+/// Sync: LWW conflict detection — stale client update is rejected.
+///
+/// A node is created directly on the server (CDC records it with the current
+/// wall-clock time T). Pushing an update with timestamp=1 (which is less than T)
+/// should be detected as "server_newer" and appear in the conflicts list.
+#[cfg(feature = "sync")]
+#[tokio::test]
+async fn sync_lww_conflict_detection() {
+    let state = grafeo_server::AppState::new_in_memory(300);
+    let node_id = {
+        let entry = state.databases().get("default").unwrap();
+        entry.db.create_node(&["Person"]).as_u64()
+    };
+    let base = spawn_server_from_state(state).await;
+
+    let client = Client::new();
+    let sync_req = json!({
+        "client_id": "test-lww",
+        "last_seen_epoch": 0u64,
+        "changes": [{
+            "kind": "update",
+            "entity_type": "node",
+            "id": node_id,
+            "after": {"name": {"String": "stale-value"}},
+            "timestamp": 1u64,   // deliberatley older than the server's CDC record
+        }],
+    });
+    let resp: Value = client
+        .post(format!("{base}/db/default/sync"))
+        .json(&sync_req)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(resp["applied"], 0);
+    assert_eq!(resp["skipped"], 1);
+    let conflicts = resp["conflicts"].as_array().unwrap();
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0]["request_index"], 0);
+    assert_eq!(conflicts[0]["reason"], "server_newer");
+}
+
+/// Sync: the `limit` query parameter truncates the changefeed response.
+///
+/// Seeds 7 nodes, then verifies that `limit=5` returns exactly 5 events while
+/// `limit=20` returns all 7. Also verifies that polling with `since` equal to
+/// the current server epoch returns an empty changefeed (caught-up state).
+#[cfg(feature = "sync")]
+#[tokio::test]
+async fn sync_limit_truncation() {
+    let state = grafeo_server::AppState::new_in_memory(300);
+    {
+        let entry = state.databases().get("default").unwrap();
+        for _ in 0..7 {
+            entry.db.create_node(&["Item"]);
+        }
+    }
+    let base = spawn_server_from_state(state).await;
+    let client = Client::new();
+
+    // Truncated pull.
+    let page: Value = client
+        .get(format!("{base}/db/default/changes?since=0&limit=5"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(page["changes"].as_array().unwrap().len(), 5);
+
+    // Full pull.
+    let full: Value = client
+        .get(format!("{base}/db/default/changes?since=0&limit=20"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(full["changes"].as_array().unwrap().len(), 7);
+
+    // Caught-up: since = server_epoch + 1 returns empty.
+    let server_epoch = full["server_epoch"].as_u64().unwrap();
+    let caught_up: Value = client
+        .get(format!(
+            "{base}/db/default/changes?since={}&limit=20",
+            server_epoch + 1
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(caught_up["changes"].as_array().unwrap().is_empty());
+}
+
+/// Sync: missing required fields produce descriptive conflict reasons.
+///
+/// Verifies the three structural validation errors: `update_missing_id`,
+/// `delete_missing_id`, and `edge_create_missing_src_dst_or_type`.
+#[cfg(feature = "sync")]
+#[tokio::test]
+async fn sync_validation_errors() {
+    let base = spawn_server().await;
+    let client = Client::new();
+
+    let sync_req = json!({
+        "client_id": "test-validation",
+        "last_seen_epoch": 0u64,
+        "changes": [
+            // update without id
+            {
+                "kind": "update",
+                "entity_type": "node",
+                "after": {"name": {"String": "x"}},
+                "timestamp": 1u64,
+            },
+            // delete without id
+            {
+                "kind": "delete",
+                "entity_type": "node",
+                "timestamp": 1u64,
+            },
+            // edge create without src/dst/type
+            {
+                "kind": "create",
+                "entity_type": "edge",
+                "timestamp": 1u64,
+            },
+        ],
+    });
+    let resp: Value = client
+        .post(format!("{base}/db/default/sync"))
+        .json(&sync_req)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(resp["applied"], 0);
+    let conflicts = resp["conflicts"].as_array().unwrap();
+    assert_eq!(conflicts.len(), 3);
+
+    let reasons: Vec<&str> = conflicts
+        .iter()
+        .map(|c| c["reason"].as_str().unwrap())
+        .collect();
+    assert!(reasons.contains(&"update_missing_id"));
+    assert!(reasons.contains(&"delete_missing_id"));
+    assert!(reasons.contains(&"edge_create_missing_src_dst_or_type"));
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket error paths
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn websocket_query_bad_syntax_returns_error() {
+    let base = spawn_server().await;
+    let ws_url = base.replace("http://", "ws://") + "/ws";
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
+
+    // Send a query with invalid GQL — should produce a "bad_request" error frame.
+    ws.send(tungstenite::Message::Text(
+        json!({
+            "type": "query",
+            "id": "err1",
+            "query": "NOT VALID SYNTAX !!!"
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    let reply = ws.next().await.unwrap().unwrap();
+    let body: Value = serde_json::from_str(reply.to_text().unwrap()).unwrap();
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["id"], "err1");
+    assert_eq!(body["error"], "bad_request");
+    assert!(
+        body["detail"].is_string(),
+        "detail should carry the parse error"
+    );
+}
+
+#[tokio::test]
+async fn websocket_query_nonexistent_database_returns_not_found() {
+    let base = spawn_server().await;
+    let ws_url = base.replace("http://", "ws://") + "/ws";
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
+
+    ws.send(tungstenite::Message::Text(
+        json!({
+            "type": "query",
+            "id": "db-miss",
+            "query": "MATCH (n) RETURN n",
+            "database": "no_such_db"
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    let reply = ws.next().await.unwrap().unwrap();
+    let body: Value = serde_json::from_str(reply.to_text().unwrap()).unwrap();
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["id"], "db-miss");
+    assert_eq!(body["error"], "not_found");
+}
+
+#[tokio::test]
+async fn websocket_query_without_id_omits_id_in_response() {
+    let base = spawn_server().await;
+    let ws_url = base.replace("http://", "ws://") + "/ws";
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
+
+    // No "id" field in the message.
+    ws.send(tungstenite::Message::Text(
+        json!({
+            "type": "query",
+            "query": "MATCH (n) RETURN count(n)"
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    let reply = ws.next().await.unwrap().unwrap();
+    let body: Value = serde_json::from_str(reply.to_text().unwrap()).unwrap();
+    assert_eq!(body["type"], "result");
+    assert!(
+        body["id"].is_null(),
+        "id should be absent when not provided"
+    );
+}
+
+#[tokio::test]
+async fn websocket_query_with_language_field() {
+    let base = spawn_server().await;
+    let ws_url = base.replace("http://", "ws://") + "/ws";
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
+
+    ws.send(tungstenite::Message::Text(
+        json!({
+            "type": "query",
+            "id": "cyq",
+            "query": "MATCH (n) RETURN count(n) AS c",
+            "language": "cypher"
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    let reply = ws.next().await.unwrap().unwrap();
+    let body: Value = serde_json::from_str(reply.to_text().unwrap()).unwrap();
+    assert_eq!(body["type"], "result");
+    assert_eq!(body["id"], "cyq");
+    assert!(body["rows"].is_array());
+}
+
+// ---------------------------------------------------------------------------
+// Rate limit: window reset
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn rate_limit_resets_after_window_expires() {
+    // 2-request window that expires after 300 ms.
+    let state = grafeo_server::AppState::new_in_memory_with_rate_limit(
+        300,
+        2,
+        std::time::Duration::from_millis(300),
+    );
+    let app = grafeo_server::router(state);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+    let base = format!("http://{addr}");
+    let client = Client::new();
+
+    // Exhaust the window.
+    for _ in 0..2 {
+        let r = client.get(format!("{base}/health")).send().await.unwrap();
+        assert_eq!(r.status(), 200);
+    }
+    let r = client.get(format!("{base}/health")).send().await.unwrap();
+    assert_eq!(r.status(), 429, "third request should be rate-limited");
+
+    // Wait for the window to expire then verify the counter resets.
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
+    let r = client.get(format!("{base}/health")).send().await.unwrap();
+    assert_eq!(
+        r.status(),
+        200,
+        "first request in new window should succeed"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Transaction error paths
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tx_begin_on_nonexistent_database_returns_404() {
+    let base = spawn_server().await;
+    let client = Client::new();
+
+    let resp = client
+        .post(format!("{base}/tx/begin"))
+        .json(&json!({"database": "ghost_db"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "not_found");
+}
+
+#[tokio::test]
+async fn tx_query_with_expired_session_returns_404() {
+    // Use a TTL-1 server so the session expires almost immediately.
+    let state = grafeo_server::AppState::new_in_memory(1);
+    let base = spawn_server_from_state(state).await;
+    let client = Client::new();
+
+    // Open a session.
+    let resp = client
+        .post(format!("{base}/tx/begin"))
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    let session_id = body["session_id"].as_str().unwrap().to_string();
+
+    // Wait for the 1-second TTL to expire.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // A query against the expired session should return 404.
+    let resp = client
+        .post(format!("{base}/tx/query"))
+        .header("X-Session-Id", &session_id)
+        .json(&json!({"query": "MATCH (n) RETURN n"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "session_not_found");
+}
+
+// ---------------------------------------------------------------------------
+// Database info: 404 on missing database
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn database_info_not_found_returns_404() {
+    let base = spawn_server().await;
+    let client = Client::new();
+
+    let resp = client
+        .get(format!("{base}/db/no_such_database"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "not_found");
+}
+
+#[tokio::test]
+async fn database_stats_not_found_returns_404() {
+    let base = spawn_server().await;
+    let client = Client::new();
+
+    let resp = client
+        .get(format!("{base}/db/no_such_database/stats"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn database_schema_not_found_returns_404() {
+    let base = spawn_server().await;
+    let client = Client::new();
+
+    let resp = client
+        .get(format!("{base}/db/no_such_database/schema"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+// ---------------------------------------------------------------------------
+// Query on nonexistent database returns 404
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn query_on_nonexistent_database_returns_404() {
+    let base = spawn_server().await;
+    let client = Client::new();
+
+    let resp = client
+        .post(format!("{base}/query"))
+        .json(&json!({
+            "query": "MATCH (n) RETURN n",
+            "database": "ghost_db"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "not_found");
+}
+
+#[cfg(feature = "bolt")]
+#[tokio::test]
+async fn bolt_route_returns_routing_table() {
+    let (_http, bolt_addr) = spawn_server_with_bolt().await;
+
+    // Exercises GrafeoBackend::route via a low-level ROUTE message.
+    let mut session = boltr::client::BoltSession::connect(bolt_addr)
+        .await
+        .unwrap();
+
+    let conn = session.connection();
+    conn.send(&boltr::message::request::ClientMessage::Route {
+        routing: boltr::types::BoltDict::new(),
+        bookmarks: vec![],
+        extra: boltr::types::BoltDict::new(),
+    })
+    .await
+    .expect("ROUTE send failed");
+
+    let response = conn.recv().await.expect("ROUTE recv failed");
+    match response {
+        boltr::message::response::ServerMessage::Success { metadata } => {
+            let rt = metadata.get("rt").expect("response should contain 'rt'");
+            let boltr::types::BoltValue::Dict(rt_dict) = rt else {
+                panic!("'rt' should be a Dict");
+            };
+            assert!(
+                rt_dict.contains_key("servers"),
+                "routing table needs servers"
+            );
+            assert!(rt_dict.contains_key("ttl"), "routing table needs ttl");
+        }
+        other => panic!("expected SUCCESS after ROUTE, got {other:?}"),
+    }
+
+    session.close().await.unwrap();
 }
