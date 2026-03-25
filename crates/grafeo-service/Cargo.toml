@@ -74,6 +74,9 @@ temporal = ["grafeo-engine/temporal"]
 # Engine: metrics
 metrics = ["grafeo-engine/metrics"]
 
+# Engine: observability (tracing spans and events)
+tracing = ["grafeo-engine/tracing"]
+
 # Engine: data models
 rdf = ["grafeo-engine/rdf"]
 

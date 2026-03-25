@@ -89,7 +89,7 @@ authors = ["S.T. Grond"]
 description = "HTTP server for the Grafeo graph database"
 
 [features]
-default = ["http", "gwp", "studio", "all-languages", "storage", "algos"]
+default = ["http", "gwp", "studio", "all-languages", "storage", "algos", "tracing"]
 
 # Transport layers
 http = ["dep:grafeo-http", "grafeo-service/openapi"]
@@ -146,6 +146,9 @@ temporal = ["grafeo-service/temporal"]
 # Engine: metrics (forwarded)
 metrics = ["grafeo-service/metrics"]
 
+# Engine: observability (tracing spans and events)
+tracing = ["grafeo-service/tracing"]
+
 # Engine: data models (forwarded)
 rdf = ["grafeo-service/rdf"]
 
@@ -153,7 +156,7 @@ rdf = ["grafeo-service/rdf"]
 full = [
     "http", "studio", "all-languages", "algos", "ai", "rdf", "storage", "embed",
     "owl-schema", "rdfs-schema", "json-schema", "auth", "tls", "gwp", "bolt",
-    "temporal", "import", "metrics", "sync", "push-changefeed", "replication",
+    "temporal", "import", "metrics", "tracing", "sync", "push-changefeed", "replication",
 ]
 
 [dependencies]
