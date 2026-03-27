@@ -1208,7 +1208,9 @@ dependencies = [
 
 [[package]]
 name = "grafeo-adapters"
-version = "0.5.25"
+version = "0.5.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f6d5f0909d7171585e927d0f2bcf0a520cee1858d815cea141826b84cfffd3f"
 dependencies = [
  "bincode",
  "byteorder",
@@ -1231,7 +1233,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-boltr"
-version = "0.4.8"
+version = "0.5.27"
 dependencies = [
  "async-trait",
  "boltr",
@@ -1247,7 +1249,9 @@ dependencies = [
 
 [[package]]
 name = "grafeo-common"
-version = "0.5.25"
+version = "0.5.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca7e7a608d716a107257ad6bdfb518fcc79b69cffc89c0d0bded2b30bffba99d"
 dependencies = [
  "arcstr",
  "bincode",
@@ -1262,11 +1266,14 @@ dependencies = [
  "serde",
  "smallvec",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
 name = "grafeo-core"
-version = "0.5.25"
+version = "0.5.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8cc51ca08ee320741bebf137936525d8f5a19d8d08efc6eeb76a16c37f6c4ff"
 dependencies = [
  "arcstr",
  "byteorder",
@@ -1293,7 +1300,9 @@ dependencies = [
 
 [[package]]
 name = "grafeo-engine"
-version = "0.5.25"
+version = "0.5.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da8b6ccab57b3666ad432a32db17b71e04e3bd8e159d6be1d351a04d8fc83292"
 dependencies = [
  "anyhow",
  "arcstr",
@@ -1321,7 +1330,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-gwp"
-version = "0.4.8"
+version = "0.5.27"
 dependencies = [
  "dashmap",
  "grafeo-common",
@@ -1337,7 +1346,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-http"
-version = "0.4.8"
+version = "0.5.27"
 dependencies = [
  "async-stream",
  "axum",
@@ -1366,7 +1375,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-server"
-version = "0.4.8"
+version = "0.5.27"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -1391,7 +1400,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-service"
-version = "0.4.8"
+version = "0.5.27"
 dependencies = [
  "base64 0.22.1",
  "dashmap",
@@ -1414,7 +1423,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-studio"
-version = "0.4.8"
+version = "0.5.27"
 dependencies = [
  "axum",
  "mime_guess",
@@ -1423,7 +1432,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-sync"
-version = "0.4.8"
+version = "0.5.27"
 dependencies = [
  "axum",
  "grafeo-service",

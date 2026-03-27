@@ -5,6 +5,29 @@ All notable changes to grafeo-server are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.27] - 2026-03-27
+
+Starting with this release, grafeo-server uses **lockstep versioning** with the
+grafeo engine: server and engine share the same version number. This replaces
+the independent 0.4.x series and makes compatibility immediately obvious.
+
+### Changed
+
+- **grafeo-engine 0.5.27**: GQL conformance (ISO/IEC 39075:2024, 234 queries cross-validated), SQL/PGQ GROUP BY/HAVING, post-edge quantifiers, path alternation, vector search filter optimization, adjacency inline capacity raised (SmallVec 4 to 8)
+
+### Fixed (via engine upgrade)
+
+- WAL directory-format data loss on close (#174)
+- UNWIND variable silently dropped in SET clause (#172, present since 0.5.14)
+- SET n:Label drops variable binding (#178, #182)
+- EXISTS/COUNT subquery bugs (target-side correlation, end-node label verification)
+- CREATE after MATCH creates phantom nodes (#181)
+- `labels(n)`/`type(r)` in aggregation (#187)
+- GROUP BY on list-valued keys, ORDER BY complex expressions leaked synthetic columns
+- SPARQL GROUP BY/ORDER BY with expressions
+- Single-file storage silent failure when WAL disabled (#185)
+- Windows read-only file ops failure
+
 ## [0.4.9] - 2026-03-25
 
 ### Added
