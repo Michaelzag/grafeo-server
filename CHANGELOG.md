@@ -5,6 +5,14 @@ All notable changes to grafeo-server are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **W3C SPARQL 1.1 Protocol**: `GET/POST /db/{name}/sparql` with `application/sparql-query`, `application/sparql-update`, form-encoded, and JSON content types, plus Accept-based response negotiation (SPARQL Results JSON)
+- **W3C Graph Store HTTP Protocol**: `GET/PUT/POST/DELETE/HEAD /db/{name}/graph-store` with `?default` and `?graph=<iri>` for RESTful named graph CRUD
+- **SPARQL Results JSON**: W3C-compliant response format with typed term bindings for SELECT and boolean for ASK
+
 ## [0.5.27] - 2026-03-27
 
 Starting with this release, grafeo-server uses **lockstep versioning** with the
