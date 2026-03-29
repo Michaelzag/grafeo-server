@@ -11,6 +11,7 @@
 //! - Rate limiting, auth, request-ID middleware
 
 pub mod encode;
+pub mod encode_sparql;
 pub mod error;
 pub mod middleware;
 #[cfg(feature = "replication")]
@@ -158,6 +159,20 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/db/{name}/graphs/{graph}",
             delete(routes::database::drop_graph),
+        )
+        // SPARQL Protocol (W3C compliant)
+        .route(
+            "/db/{name}/sparql",
+            get(routes::sparql_protocol::sparql_get).post(routes::sparql_protocol::sparql_post),
+        )
+        // Graph Store HTTP Protocol (W3C compliant)
+        .route(
+            "/db/{name}/graph-store",
+            get(routes::graph_store::graph_store_get)
+                .put(routes::graph_store::graph_store_put)
+                .post(routes::graph_store::graph_store_post)
+                .delete(routes::graph_store::graph_store_delete)
+                .head(routes::graph_store::graph_store_head),
         )
         // Admin
         .route("/admin/{db}/stats", get(routes::admin::admin_stats))

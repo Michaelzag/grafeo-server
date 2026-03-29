@@ -1361,6 +1361,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sysinfo",
  "thiserror 2.0.18",
  "tokio",
