@@ -72,10 +72,21 @@ impl AdminService {
             .get(db_name)
             .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
 
-        tokio::task::spawn_blocking(move || entry.db.wal_checkpoint())
-            .await
-            .map_err(|e| ServiceError::Internal(e.to_string()))?
-            .map_err(|e| ServiceError::Internal(e.to_string()))
+        #[cfg(feature = "async-storage")]
+        {
+            entry
+                .db
+                .async_wal_checkpoint()
+                .await
+                .map_err(|e| ServiceError::Internal(e.to_string()))
+        }
+        #[cfg(not(feature = "async-storage"))]
+        {
+            tokio::task::spawn_blocking(move || entry.db.wal_checkpoint())
+                .await
+                .map_err(|e| ServiceError::Internal(e.to_string()))?
+                .map_err(|e| ServiceError::Internal(e.to_string()))
+        }
     }
 
     /// Validate database integrity.
@@ -329,6 +340,43 @@ impl AdminService {
         .await
         .map_err(|e| ServiceError::Internal(e.to_string()))
     }
+
+    /// Write a point-in-time snapshot to the `.grafeo` database file.
+    ///
+    /// Requires the `async-storage` and `grafeo-file` features. Returns an
+    /// error explaining the missing features when they are not enabled.
+    // The await lives inside the cfg(async-storage, grafeo-file) branch;
+    // without those features the function body is sync, but the signature
+    // must remain async for the HTTP handler.
+    #[allow(clippy::unused_async)]
+    pub async fn write_snapshot(
+        databases: &DatabaseManager,
+        db_name: &str,
+    ) -> Result<(), ServiceError> {
+        if databases.is_read_only() {
+            return Err(ServiceError::ReadOnly);
+        }
+
+        let entry = databases
+            .get(db_name)
+            .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
+
+        #[cfg(all(feature = "async-storage", feature = "grafeo-file"))]
+        {
+            entry
+                .db
+                .async_write_snapshot()
+                .await
+                .map_err(|e| ServiceError::Internal(e.to_string()))
+        }
+        #[cfg(not(all(feature = "async-storage", feature = "grafeo-file")))]
+        {
+            let _ = entry;
+            Err(ServiceError::BadRequest(
+                "snapshot requires the 'async-storage' and 'grafeo-file' features".to_string(),
+            ))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -544,6 +592,23 @@ mod tests {
     async fn test_list_graphs_not_found() {
         let state = ServiceState::new_in_memory(300);
         let err = AdminService::list_graphs(state.databases(), "nonexistent")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn test_write_snapshot_in_memory() {
+        let state = ServiceState::new_in_memory(300);
+        // In-memory databases have no file manager, so snapshot should fail.
+        let result = AdminService::write_snapshot(state.databases(), "default").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_write_snapshot_not_found() {
+        let state = ServiceState::new_in_memory(300);
+        let err = AdminService::write_snapshot(state.databases(), "nonexistent")
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::NotFound(_)));

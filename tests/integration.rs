@@ -2497,6 +2497,34 @@ async fn admin_wal_checkpoint_succeeds() {
 }
 
 #[tokio::test]
+async fn admin_write_snapshot_in_memory_errors() {
+    let base = spawn_server().await;
+    let client = Client::new();
+
+    // In-memory server: snapshot will fail (no file manager), but endpoint exists.
+    let resp = client
+        .post(format!("{base}/admin/default/snapshot"))
+        .send()
+        .await
+        .unwrap();
+    // Should not be 404 (endpoint exists), expect 400 or 500 depending on features.
+    assert_ne!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn admin_write_snapshot_not_found() {
+    let base = spawn_server().await;
+    let client = Client::new();
+
+    let resp = client
+        .post(format!("{base}/admin/nonexistent/snapshot"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
 async fn admin_validate_clean_database() {
     let base = spawn_server().await;
     let client = Client::new();

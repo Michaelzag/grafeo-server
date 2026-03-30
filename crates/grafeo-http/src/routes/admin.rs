@@ -221,3 +221,28 @@ pub async fn admin_drop_index(
     let dropped = AdminService::drop_index(state.databases(), &db, index).await?;
     Ok(Json(serde_json::json!({ "dropped": dropped })))
 }
+
+/// Write a point-in-time snapshot.
+///
+/// Creates a `.grafeo` single-file snapshot of the database. Requires the
+/// `async-storage` and `grafeo-file` features to be enabled.
+#[utoipa::path(
+    post,
+    path = "/admin/{db}/snapshot",
+    params(
+        ("db" = String, Path, description = "Database name"),
+    ),
+    responses(
+        (status = 200, description = "Snapshot created"),
+        (status = 400, description = "Feature not enabled", body = crate::error::ErrorBody),
+        (status = 404, description = "Database not found", body = crate::error::ErrorBody),
+    ),
+    tag = "Admin"
+)]
+pub async fn admin_write_snapshot(
+    State(state): State<AppState>,
+    Path(db): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    AdminService::write_snapshot(state.databases(), &db).await?;
+    Ok(Json(serde_json::json!({ "success": true })))
+}

@@ -11,6 +11,7 @@
 //! - Rate limiting, auth, request-ID middleware
 
 pub mod encode;
+pub mod encode_sparql;
 pub mod error;
 pub mod middleware;
 #[cfg(feature = "replication")]
@@ -44,7 +45,7 @@ pub use state::AppState;
     info(
         title = "Grafeo Server API",
         description = "HTTP API for the Grafeo graph database engine.\n\nSupports GQL, Cypher, GraphQL, Gremlin, SPARQL, and SQL/PGQ query languages with both auto-commit and explicit transaction modes.\n\nAll query languages support CALL procedures for 22+ built-in graph algorithms (PageRank, BFS, WCC, Dijkstra, Louvain, etc.).\n\nMulti-database support: create, delete, and query named databases.",
-        version = "0.5.27",
+        version = "0.5.30",
         license(name = "Apache-2.0"),
     ),
     paths(
@@ -79,6 +80,7 @@ pub use state::AppState;
         routes::admin::admin_cache_stats,
         routes::admin::admin_clear_cache,
         routes::admin::admin_memory_usage,
+        routes::admin::admin_write_snapshot,
         routes::search::vector_search,
         routes::search::text_search,
         routes::search::hybrid_search,
@@ -159,6 +161,20 @@ pub fn router(state: AppState) -> Router {
             "/db/{name}/graphs/{graph}",
             delete(routes::database::drop_graph),
         )
+        // SPARQL Protocol (W3C compliant)
+        .route(
+            "/db/{name}/sparql",
+            get(routes::sparql_protocol::sparql_get).post(routes::sparql_protocol::sparql_post),
+        )
+        // Graph Store HTTP Protocol (W3C compliant)
+        .route(
+            "/db/{name}/graph-store",
+            get(routes::graph_store::graph_store_get)
+                .put(routes::graph_store::graph_store_put)
+                .post(routes::graph_store::graph_store_post)
+                .delete(routes::graph_store::graph_store_delete)
+                .head(routes::graph_store::graph_store_head),
+        )
         // Admin
         .route("/admin/{db}/stats", get(routes::admin::admin_stats))
         .route("/admin/{db}/wal", get(routes::admin::admin_wal_status))
@@ -177,6 +193,10 @@ pub fn router(state: AppState) -> Router {
             post(routes::admin::admin_clear_cache),
         )
         .route("/admin/{db}/memory", get(routes::admin::admin_memory_usage))
+        .route(
+            "/admin/{db}/snapshot",
+            post(routes::admin::admin_write_snapshot),
+        )
         // Search
         .route("/search/vector", post(routes::search::vector_search))
         .route("/search/text", post(routes::search::text_search))
