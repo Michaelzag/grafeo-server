@@ -80,6 +80,7 @@ pub use state::AppState;
         routes::admin::admin_cache_stats,
         routes::admin::admin_clear_cache,
         routes::admin::admin_memory_usage,
+        routes::admin::admin_write_snapshot,
         routes::search::vector_search,
         routes::search::text_search,
         routes::search::hybrid_search,
@@ -192,6 +193,10 @@ pub fn router(state: AppState) -> Router {
             post(routes::admin::admin_clear_cache),
         )
         .route("/admin/{db}/memory", get(routes::admin::admin_memory_usage))
+        .route(
+            "/admin/{db}/snapshot",
+            post(routes::admin::admin_write_snapshot),
+        )
         // Search
         .route("/search/vector", post(routes::search::vector_search))
         .route("/search/text", post(routes::search::text_search))
