@@ -9,7 +9,7 @@
 //! cargo build --release -p grafeo-maelstrom
 //! maelstrom test -w lin-kv \
 //!   --bin target/release/grafeo-maelstrom \
-//!   --node-count 3 --time-limit 20 --rate 100 \
+//!   --node-count 3 --concurrency 6 --time-limit 20 --rate 100 \
 //!   --consistency-models read-uncommitted
 //! ```
 
