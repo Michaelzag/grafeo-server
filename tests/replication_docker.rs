@@ -123,15 +123,24 @@ async fn docker_write_and_converge() {
     );
 
     // Debug: check replication status on replica
-    let repl_status = client()
+    if let Ok(resp) = client()
         .get(format!("{REPLICA1}/admin/replication"))
         .send()
         .await
-        .unwrap()
-        .json::<Value>()
-        .await
-        .unwrap();
-    eprintln!("Replica-1 replication status: {repl_status}");
+    {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        eprintln!("Replica-1 replication status ({status}): {body}");
+    } else {
+        eprintln!("Replica-1 replication status: unreachable");
+    }
+
+    // Debug: check node count on replicas before waiting
+    eprintln!(
+        "Before wait: R1={}, R2={}",
+        node_count(REPLICA1).await,
+        node_count(REPLICA2).await
+    );
 
     // Wait for replicas to converge (background replication task polls every 500ms)
     let converged = wait_for(
