@@ -15,9 +15,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use grafeo_service::ServiceState;
+use grafeo_service::error::ServiceError;
 use grafeo_service::replication::ReplicationState;
 use grafeo_service::sync::{SyncChangeRequest, SyncRequest, SyncService};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 const BATCH_LIMIT: usize = 500;
@@ -44,6 +45,7 @@ pub fn start(state: ServiceState) {
 
     tokio::spawn(async move {
         poll_loop(state, primary_url, replication_state).await;
+        error!("Replication poll loop exited unexpectedly");
     });
 }
 
@@ -96,7 +98,9 @@ async fn replicate_database(
     db_name: &str,
     replication_state: &ReplicationState,
 ) -> Result<(), ReplicationError> {
-    let since = replication_state.last_epoch(db_name);
+    let last = replication_state.last_epoch(db_name);
+    // `since` is inclusive in the changes API, so add 1 to skip already-applied epochs.
+    let since = if last > 0 { last + 1 } else { 0 };
     let url = format!("{primary_url}/db/{db_name}/changes?since={since}&limit={BATCH_LIMIT}");
 
     debug!(db = %db_name, since = since, "Polling primary for changes");
@@ -166,7 +170,17 @@ async fn replicate_database(
         schema_version: None,
     };
 
-    let result = SyncService::apply(state.databases(), db_name, req);
+    let state_clone = state.clone();
+    let db_name_owned = db_name.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        SyncService::apply(state_clone.databases(), &db_name_owned, req)
+    })
+    .await
+    .unwrap_or_else(|e| {
+        error!(error = %e, "SyncService::apply panicked");
+        Err(ServiceError::Internal(format!("apply panicked: {e}")))
+    });
+
     match result {
         Ok(resp) => {
             if resp.applied > 0 || resp.skipped > 0 {

@@ -57,7 +57,7 @@ RUN cargo build --release --features full && \
     strip target/release/grafeo-server
 
 # --- Runtime: GWP wire-protocol-only (no HTTP healthcheck) ---
-FROM debian:bookworm-slim AS runtime-gwp
+FROM debian:trixie-slim AS runtime-gwp
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 VOLUME /data
 EXPOSE 7688
@@ -65,7 +65,7 @@ ENTRYPOINT ["grafeo-server"]
 CMD ["--host", "0.0.0.0", "--data-dir", "/data"]
 
 # --- Runtime: Bolt wire-protocol-only (no HTTP healthcheck) ---
-FROM debian:bookworm-slim AS runtime-bolt
+FROM debian:trixie-slim AS runtime-bolt
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 VOLUME /data
 EXPOSE 7687
@@ -73,7 +73,7 @@ ENTRYPOINT ["grafeo-server"]
 CMD ["--host", "0.0.0.0", "--data-dir", "/data"]
 
 # --- Runtime: shared HTTP base ---
-FROM debian:bookworm-slim AS runtime-http
+FROM debian:trixie-slim AS runtime-http
 RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
 VOLUME /data
 EXPOSE 7474
@@ -83,7 +83,7 @@ ENTRYPOINT ["grafeo-server"]
 CMD ["--host", "0.0.0.0", "--port", "7474", "--data-dir", "/data"]
 
 # --- Runtime: full (all ports) ---
-FROM debian:bookworm-slim AS runtime-full
+FROM debian:trixie-slim AS runtime-full
 RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
 VOLUME /data
 EXPOSE 7474 7687 7688

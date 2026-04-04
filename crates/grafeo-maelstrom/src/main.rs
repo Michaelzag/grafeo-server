@@ -9,7 +9,7 @@
 //! cargo build --release -p grafeo-maelstrom
 //! maelstrom test -w lin-kv \
 //!   --bin target/release/grafeo-maelstrom \
-//!   --node-count 3 --time-limit 20 --rate 100 \
+//!   --node-count 3 --concurrency 6 --time-limit 20 --rate 100 \
 //!   --consistency-models read-uncommitted
 //! ```
 
@@ -177,31 +177,62 @@ impl Node {
                 self.id = body["node_id"].as_str().unwrap_or("").to_string();
                 self.node_ids = body["node_ids"]
                     .as_array()
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 self.reply(&src, req_msg_id, json!({"type": "init_ok"}), &mut out);
             }
 
             // ----- KV: read -----
+            // Reads are forwarded to the primary for linearizability.
+            // Replicas could serve stale data, which is correct for eventual
+            // consistency but fails Maelstrom's lin-kv checker.
             "read" => {
                 let key = key_str(&body["key"]);
-                match self.store.get(&key) {
-                    Some(sv) => {
-                        self.reply(
-                            &src,
-                            req_msg_id,
-                            json!({"type": "read_ok", "value": sv.value}),
-                            &mut out,
-                        );
+
+                if self.is_primary() {
+                    match self.store.get(&key) {
+                        Some(sv) => {
+                            self.reply(
+                                &src,
+                                req_msg_id,
+                                json!({"type": "read_ok", "value": sv.value}),
+                                &mut out,
+                            );
+                        }
+                        None => {
+                            self.reply(
+                                &src,
+                                req_msg_id,
+                                json!({"type": "error", "code": 20, "text": "key does not exist"}),
+                                &mut out,
+                            );
+                        }
                     }
-                    None => {
-                        self.reply(
-                            &src,
-                            req_msg_id,
-                            json!({"type": "error", "code": 20, "text": "key does not exist"}),
-                            &mut out,
-                        );
-                    }
+                } else {
+                    // Forward read to primary
+                    let mid = self.msg_id();
+                    self.pending.insert(
+                        mid,
+                        PendingForward {
+                            client_src: src.clone(),
+                            client_msg_id: req_msg_id.clone(),
+                        },
+                    );
+                    let primary = self.primary_id();
+                    Self::emit(
+                        &self.id,
+                        &primary,
+                        json!({
+                            "type": "fwd_read",
+                            "msg_id": mid,
+                            "key": body["key"],
+                        }),
+                        &mut out,
+                    );
                 }
             }
 
@@ -212,16 +243,25 @@ impl Node {
 
                 if self.is_primary() {
                     let hlc = self.hlc.tick();
-                    self.store.insert(key.clone(), StampedValue { value: value.clone(), hlc });
+                    self.store.insert(
+                        key.clone(),
+                        StampedValue {
+                            value: value.clone(),
+                            hlc,
+                        },
+                    );
                     self.reply(&src, req_msg_id, json!({"type": "write_ok"}), &mut out);
                     self.broadcast_replicate(&key, &value, hlc, &mut out);
                 } else {
                     // Forward to primary
                     let mid = self.msg_id();
-                    self.pending.insert(mid, PendingForward {
-                        client_src: src.clone(),
-                        client_msg_id: req_msg_id.clone(),
-                    });
+                    self.pending.insert(
+                        mid,
+                        PendingForward {
+                            client_src: src.clone(),
+                            client_msg_id: req_msg_id.clone(),
+                        },
+                    );
                     let primary = self.primary_id();
                     Self::emit(
                         &self.id,
@@ -247,7 +287,13 @@ impl Node {
                     match self.store.get(&key) {
                         Some(sv) if sv.value == *from => {
                             let hlc = self.hlc.tick();
-                            self.store.insert(key.clone(), StampedValue { value: to.clone(), hlc });
+                            self.store.insert(
+                                key.clone(),
+                                StampedValue {
+                                    value: to.clone(),
+                                    hlc,
+                                },
+                            );
                             self.reply(&src, req_msg_id, json!({"type": "cas_ok"}), &mut out);
                             self.broadcast_replicate(&key, &to, hlc, &mut out);
                         }
@@ -271,10 +317,13 @@ impl Node {
                 } else {
                     // Forward CAS to primary
                     let mid = self.msg_id();
-                    self.pending.insert(mid, PendingForward {
-                        client_src: src.clone(),
-                        client_msg_id: req_msg_id.clone(),
-                    });
+                    self.pending.insert(
+                        mid,
+                        PendingForward {
+                            client_src: src.clone(),
+                            client_msg_id: req_msg_id.clone(),
+                        },
+                    );
                     let primary = self.primary_id();
                     Self::emit(
                         &self.id,
@@ -291,12 +340,54 @@ impl Node {
                 }
             }
 
+            // ----- Inter-node: forwarded read (primary receives) -----
+            "fwd_read" => {
+                let key = key_str(&body["key"]);
+                match self.store.get(&key) {
+                    Some(sv) => {
+                        self.reply(
+                            &src,
+                            req_msg_id,
+                            json!({"type": "fwd_read_ok", "value": sv.value}),
+                            &mut out,
+                        );
+                    }
+                    None => {
+                        self.reply(
+                            &src,
+                            req_msg_id,
+                            json!({"type": "fwd_read_err", "code": 20, "text": "key does not exist"}),
+                            &mut out,
+                        );
+                    }
+                }
+            }
+
+            // ----- Inter-node: forwarded read response (replica receives) -----
+            "fwd_read_ok" => {
+                let in_reply = body["in_reply_to"].as_u64().unwrap_or(0);
+                if let Some(fwd) = self.pending.remove(&in_reply) {
+                    self.reply(
+                        &fwd.client_src,
+                        &fwd.client_msg_id,
+                        json!({"type": "read_ok", "value": body["value"]}),
+                        &mut out,
+                    );
+                }
+            }
+
             // ----- Inter-node: forwarded write (primary receives) -----
             "fwd_write" => {
                 let key = key_str(&body["key"]);
                 let value = body["value"].clone();
                 let hlc = self.hlc.tick();
-                self.store.insert(key.clone(), StampedValue { value: value.clone(), hlc });
+                self.store.insert(
+                    key.clone(),
+                    StampedValue {
+                        value: value.clone(),
+                        hlc,
+                    },
+                );
                 self.reply(&src, req_msg_id, json!({"type": "fwd_write_ok"}), &mut out);
                 self.broadcast_replicate(&key, &value, hlc, &mut out);
             }
@@ -323,7 +414,13 @@ impl Node {
                 match self.store.get(&key) {
                     Some(sv) if sv.value == *from => {
                         let hlc = self.hlc.tick();
-                        self.store.insert(key.clone(), StampedValue { value: to.clone(), hlc });
+                        self.store.insert(
+                            key.clone(),
+                            StampedValue {
+                                value: to.clone(),
+                                hlc,
+                            },
+                        );
                         self.reply(&src, req_msg_id, json!({"type": "fwd_cas_ok"}), &mut out);
                         self.broadcast_replicate(&key, &to, hlc, &mut out);
                     }
@@ -359,8 +456,8 @@ impl Node {
                 }
             }
 
-            // ----- Inter-node: forwarded CAS failure (replica receives) -----
-            "fwd_cas_err" => {
+            // ----- Inter-node: forwarded error (replica receives) -----
+            "fwd_cas_err" | "fwd_read_err" => {
                 let in_reply = body["in_reply_to"].as_u64().unwrap_or(0);
                 if let Some(fwd) = self.pending.remove(&in_reply) {
                     self.reply(
@@ -383,13 +480,16 @@ impl Node {
                 let remote_hlc = body["hlc"].as_u64().unwrap_or(0);
 
                 // LWW: only apply if remote is newer
-                let dominated = self
-                    .store
-                    .get(&key)
-                    .is_some_and(|sv| sv.hlc >= remote_hlc);
+                let dominated = self.store.get(&key).is_some_and(|sv| sv.hlc >= remote_hlc);
 
                 if !dominated {
-                    self.store.insert(key, StampedValue { value, hlc: remote_hlc });
+                    self.store.insert(
+                        key,
+                        StampedValue {
+                            value,
+                            hlc: remote_hlc,
+                        },
+                    );
                 }
                 self.hlc.update(remote_hlc);
                 self.reply(&src, req_msg_id, json!({"type": "replicate_ok"}), &mut out);

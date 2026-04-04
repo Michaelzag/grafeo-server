@@ -25,13 +25,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # grafeo-server depends on local grafeo crates via path
-      - name: Checkout grafeo engine
-        uses: actions/checkout@v4
-        with:
-          repository: GrafeoDB/grafeo
-          path: ../grafeo
-
       - name: Create empty client dist
         run: mkdir -p client/dist
 
@@ -47,8 +40,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install Maelstrom
+      - name: Install Maelstrom and gnuplot
         run: |
+          sudo apt-get update && sudo apt-get install -y gnuplot
           curl -fsSL https://github.com/jepsen-io/maelstrom/releases/download/v0.2.4/maelstrom.tar.bz2 \
             | tar -xj
           echo "$PWD/maelstrom" >> "$GITHUB_PATH"
@@ -61,6 +55,7 @@ jobs:
           maelstrom test -w lin-kv \
             --bin target/release/grafeo-maelstrom \
             --node-count 3 \
+            --concurrency 6 \
             --time-limit 10 \
             --rate 50 \
             --consistency-models read-uncommitted
@@ -89,23 +84,18 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Checkout grafeo engine
-        uses: actions/checkout@v4
-        with:
-          repository: GrafeoDB/grafeo
-          path: ../grafeo
-
       - name: Create empty client dist
         run: mkdir -p client/dist
 
-      - name: Build Docker image
-        run: docker build -t grafeo-server:test .
-
-      - name: Start replication cluster
-        run: docker compose -f tests/docker-compose.replication.yml up -d --wait
+      - name: Build and start replication cluster
+        run: docker compose -f tests/docker-compose.replication.yml up -d --build --wait
 
       - name: Run Docker replication tests
         run: cargo test --features "full" --test replication_docker -- --ignored --test-threads=1 --nocapture
+
+      - name: Show container logs
+        if: always()
+        run: docker compose -f tests/docker-compose.replication.yml logs --tail=100
 
       - name: Teardown cluster
         if: always()

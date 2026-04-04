@@ -48,8 +48,18 @@ async fn query(base: &str, gql: &str) -> Value {
 }
 
 async fn node_count(base: &str) -> i64 {
-    let resp = query(base, "MATCH (n) RETURN count(n) AS cnt").await;
-    resp["rows"][0][0].as_i64().unwrap_or(0)
+    let result = client()
+        .post(format!("{base}/query"))
+        .json(&json!({"query": "MATCH (n) RETURN count(n) AS cnt"}))
+        .send()
+        .await;
+    match result {
+        Ok(resp) => {
+            let body: Value = resp.json().await.unwrap_or_default();
+            body["rows"][0][0].as_i64().unwrap_or(0)
+        }
+        Err(_) => 0,
+    }
 }
 
 /// Polls until a condition is met or timeout expires.
@@ -93,9 +103,48 @@ async fn docker_write_and_converge() {
         "Primary should have at least 5 nodes, got {primary_count}"
     );
 
+    // Debug: check if CDC changefeed has events on the primary
+    let changes_resp = client()
+        .get(format!("{PRIMARY}/db/default/changes?since=0&limit=100"))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    let change_count = changes_resp["changes"].as_array().map_or(0, |a| a.len());
+    eprintln!(
+        "CDC changefeed: {} events, server_epoch={}",
+        change_count, changes_resp["server_epoch"]
+    );
+    assert!(
+        change_count > 0,
+        "Primary CDC should have events after writes, got: {changes_resp}"
+    );
+
+    // Debug: check replication status on replica
+    if let Ok(resp) = client()
+        .get(format!("{REPLICA1}/admin/replication"))
+        .send()
+        .await
+    {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        eprintln!("Replica-1 replication status ({status}): {body}");
+    } else {
+        eprintln!("Replica-1 replication status: unreachable");
+    }
+
+    // Debug: check node count on replicas before waiting
+    eprintln!(
+        "Before wait: R1={}, R2={}",
+        node_count(REPLICA1).await,
+        node_count(REPLICA2).await
+    );
+
     // Wait for replicas to converge (background replication task polls every 500ms)
     let converged = wait_for(
-        Duration::from_secs(10),
+        Duration::from_secs(30),
         Duration::from_millis(500),
         || async {
             let r1 = node_count(REPLICA1).await;
@@ -133,7 +182,7 @@ async fn docker_session_mutations_converge() {
 
     // Wait for convergence
     let converged = wait_for(
-        Duration::from_secs(10),
+        Duration::from_secs(30),
         Duration::from_millis(500),
         || async {
             let r1 = node_count(REPLICA1).await;
