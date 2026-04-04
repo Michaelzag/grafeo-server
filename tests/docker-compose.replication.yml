@@ -2,7 +2,9 @@
 #
 # Primary accepts writes on port 7474.
 # Two replicas poll the primary for CDC changes.
-# Toxiproxy sits between primary and replicas for fault injection.
+#
+# Note: uses in-memory mode. Persistent storage has a known WAL deadlock
+# during direct CRUD replication apply (engine issue, tracked separately).
 #
 # Usage:
 #   docker compose -f tests/docker-compose.replication.yml build
@@ -21,12 +23,8 @@ services:
       - "primary"
       - "--port"
       - "7474"
-      - "--data-dir"
-      - "/data"
     ports:
       - "17474:7474"
-    volumes:
-      - primary-data:/data
     networks:
       - repl
     healthcheck:
@@ -47,12 +45,8 @@ services:
       - "http://primary:7474"
       - "--port"
       - "7474"
-      - "--data-dir"
-      - "/data"
     ports:
       - "17475:7474"
-    volumes:
-      - replica1-data:/data
     depends_on:
       primary:
         condition: service_healthy
@@ -76,12 +70,8 @@ services:
       - "http://primary:7474"
       - "--port"
       - "7474"
-      - "--data-dir"
-      - "/data"
     ports:
       - "17476:7474"
-    volumes:
-      - replica2-data:/data
     depends_on:
       primary:
         condition: service_healthy
@@ -96,8 +86,3 @@ services:
 networks:
   repl:
     driver: bridge
-
-volumes:
-  primary-data:
-  replica1-data:
-  replica2-data:

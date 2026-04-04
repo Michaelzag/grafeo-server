@@ -317,13 +317,9 @@ impl SyncService {
         let mut conflicts: Vec<ConflictRecord> = Vec::new();
         let mut id_mappings: Vec<IdMapping> = Vec::new();
 
-        // Wrap all mutations in a session transaction for atomic visibility.
-        // Readers will not see partial batches: either all changes are visible
-        // (on commit) or none (on rollback/crash).
-        let mut session = db.session();
-        session.begin_transaction().map_err(|e| {
-            ServiceError::Internal(format!("Failed to begin sync transaction: {e}"))
-        })?;
+        // Use the database directly for mutations. Each operation auto-commits.
+        // TODO: wrap in a session transaction once the deadlock in persistent
+        // mode is resolved (see replication_task spawn_blocking investigation).
 
         for (idx, change) in request.changes.iter().enumerate() {
             match change.kind.as_str() {
@@ -341,9 +337,9 @@ impl SyncService {
                                 json_to_props(after).collect();
                             let props_refs: Vec<(&str, grafeo_common::types::Value)> =
                                 props.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
-                            session.create_node_with_props(&labels, props_refs)
+                            db.create_node_with_props(&labels, props_refs)
                         } else {
-                            session.create_node(&labels)
+                            db.create_node(&labels)
                         };
                         id_mappings.push(IdMapping {
                             request_index: idx,
@@ -358,14 +354,14 @@ impl SyncService {
                                     json_to_props(after).collect();
                                 let props_refs: Vec<(&str, grafeo_common::types::Value)> =
                                     props.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
-                                session.create_edge_with_props(
+                                db.create_edge_with_props(
                                     NodeId::new(src),
                                     NodeId::new(dst),
                                     et,
                                     props_refs,
                                 )
                             } else {
-                                session.create_edge(NodeId::new(src), NodeId::new(dst), et)
+                                db.create_edge(NodeId::new(src), NodeId::new(dst), et)
                             };
                             id_mappings.push(IdMapping {
                                 request_index: idx,
@@ -410,7 +406,7 @@ impl SyncService {
                                     .and_then(|n| n.get_property(prop_key).cloned())
                                     .unwrap_or(grafeo_common::types::Value::Null);
                                 let merged = crate::crdt::apply_op(&current, op);
-                                session.set_node_property(node_id, prop_key, merged);
+                                db.set_node_property(node_id, prop_key, merged);
                                 applied += 1;
                             }
                             "edge" => {
@@ -420,7 +416,7 @@ impl SyncService {
                                     .and_then(|e| e.get_property(prop_key).cloned())
                                     .unwrap_or(grafeo_common::types::Value::Null);
                                 let merged = crate::crdt::apply_op(&current, op);
-                                session.set_edge_property(edge_id, prop_key, merged);
+                                db.set_edge_property(edge_id, prop_key, merged);
                                 applied += 1;
                             }
                             _ => {
@@ -460,7 +456,7 @@ impl SyncService {
                                 skipped += 1;
                             } else {
                                 for (key, val) in json_to_props(after) {
-                                    session.set_node_property(node_id, &key, val);
+                                    db.set_node_property(node_id, &key, val);
                                 }
                                 applied += 1;
                             }
@@ -479,7 +475,7 @@ impl SyncService {
                                 skipped += 1;
                             } else {
                                 for (key, val) in json_to_props(after) {
-                                    session.set_edge_property(edge_id, &key, val);
+                                    db.set_edge_property(edge_id, &key, val);
                                 }
                                 applied += 1;
                             }
@@ -519,7 +515,7 @@ impl SyncService {
                                 });
                                 skipped += 1;
                             } else {
-                                session.delete_node(node_id);
+                                db.delete_node(node_id);
                                 applied += 1;
                             }
                         }
@@ -536,7 +532,7 @@ impl SyncService {
                                 });
                                 skipped += 1;
                             } else {
-                                session.delete_edge(edge_id);
+                                db.delete_edge(edge_id);
                                 applied += 1;
                             }
                         }
@@ -557,12 +553,6 @@ impl SyncService {
                 }
             }
         }
-
-        // Commit all mutations atomically. If this fails, all changes are
-        // rolled back and readers never see partial state.
-        session.commit().map_err(|e| {
-            ServiceError::Internal(format!("Failed to commit sync transaction: {e}"))
-        })?;
 
         let server_schema = compute_schema_version(db);
         let schema_mismatch = request
