@@ -48,8 +48,18 @@ async fn query(base: &str, gql: &str) -> Value {
 }
 
 async fn node_count(base: &str) -> i64 {
-    let resp = query(base, "MATCH (n) RETURN count(n) AS cnt").await;
-    resp["rows"][0][0].as_i64().unwrap_or(0)
+    let result = client()
+        .post(format!("{base}/query"))
+        .json(&json!({"query": "MATCH (n) RETURN count(n) AS cnt"}))
+        .send()
+        .await;
+    match result {
+        Ok(resp) => {
+            let body: Value = resp.json().await.unwrap_or_default();
+            body["rows"][0][0].as_i64().unwrap_or(0)
+        }
+        Err(_) => 0,
+    }
 }
 
 /// Polls until a condition is met or timeout expires.
