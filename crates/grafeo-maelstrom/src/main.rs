@@ -187,25 +187,52 @@ impl Node {
             }
 
             // ----- KV: read -----
+            // Reads are forwarded to the primary for linearizability.
+            // Replicas could serve stale data, which is correct for eventual
+            // consistency but fails Maelstrom's lin-kv checker.
             "read" => {
                 let key = key_str(&body["key"]);
-                match self.store.get(&key) {
-                    Some(sv) => {
-                        self.reply(
-                            &src,
-                            req_msg_id,
-                            json!({"type": "read_ok", "value": sv.value}),
-                            &mut out,
-                        );
+
+                if self.is_primary() {
+                    match self.store.get(&key) {
+                        Some(sv) => {
+                            self.reply(
+                                &src,
+                                req_msg_id,
+                                json!({"type": "read_ok", "value": sv.value}),
+                                &mut out,
+                            );
+                        }
+                        None => {
+                            self.reply(
+                                &src,
+                                req_msg_id,
+                                json!({"type": "error", "code": 20, "text": "key does not exist"}),
+                                &mut out,
+                            );
+                        }
                     }
-                    None => {
-                        self.reply(
-                            &src,
-                            req_msg_id,
-                            json!({"type": "error", "code": 20, "text": "key does not exist"}),
-                            &mut out,
-                        );
-                    }
+                } else {
+                    // Forward read to primary
+                    let mid = self.msg_id();
+                    self.pending.insert(
+                        mid,
+                        PendingForward {
+                            client_src: src.clone(),
+                            client_msg_id: req_msg_id.clone(),
+                        },
+                    );
+                    let primary = self.primary_id();
+                    Self::emit(
+                        &self.id,
+                        &primary,
+                        json!({
+                            "type": "fwd_read",
+                            "msg_id": mid,
+                            "key": body["key"],
+                        }),
+                        &mut out,
+                    );
                 }
             }
 
@@ -313,6 +340,42 @@ impl Node {
                 }
             }
 
+            // ----- Inter-node: forwarded read (primary receives) -----
+            "fwd_read" => {
+                let key = key_str(&body["key"]);
+                match self.store.get(&key) {
+                    Some(sv) => {
+                        self.reply(
+                            &src,
+                            req_msg_id,
+                            json!({"type": "fwd_read_ok", "value": sv.value}),
+                            &mut out,
+                        );
+                    }
+                    None => {
+                        self.reply(
+                            &src,
+                            req_msg_id,
+                            json!({"type": "fwd_read_err", "code": 20, "text": "key does not exist"}),
+                            &mut out,
+                        );
+                    }
+                }
+            }
+
+            // ----- Inter-node: forwarded read response (replica receives) -----
+            "fwd_read_ok" => {
+                let in_reply = body["in_reply_to"].as_u64().unwrap_or(0);
+                if let Some(fwd) = self.pending.remove(&in_reply) {
+                    self.reply(
+                        &fwd.client_src,
+                        &fwd.client_msg_id,
+                        json!({"type": "read_ok", "value": body["value"]}),
+                        &mut out,
+                    );
+                }
+            }
+
             // ----- Inter-node: forwarded write (primary receives) -----
             "fwd_write" => {
                 let key = key_str(&body["key"]);
@@ -393,8 +456,8 @@ impl Node {
                 }
             }
 
-            // ----- Inter-node: forwarded CAS failure (replica receives) -----
-            "fwd_cas_err" => {
+            // ----- Inter-node: forwarded error (replica receives) -----
+            "fwd_cas_err" | "fwd_read_err" => {
                 let in_reply = body["in_reply_to"].as_u64().unwrap_or(0);
                 if let Some(fwd) = self.pending.remove(&in_reply) {
                     self.reply(
