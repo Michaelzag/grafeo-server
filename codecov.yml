@@ -31,3 +31,4 @@ ignore:
   - "scripts/**"
   - "docs/**"
   - "examples/**"
+  - "crates/grafeo-maelstrom/**"
