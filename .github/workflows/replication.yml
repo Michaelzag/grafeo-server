@@ -87,11 +87,12 @@ jobs:
       - name: Create empty client dist
         run: mkdir -p client/dist
 
-      - name: Build Docker image
-        run: docker build -t grafeo-server:test .
+      - name: Build and start replication cluster
+        run: docker compose -f tests/docker-compose.replication.yml up -d --build --wait
 
-      - name: Start replication cluster
-        run: docker compose -f tests/docker-compose.replication.yml up -d --wait
+      - name: Show container logs on failure
+        if: failure()
+        run: docker compose -f tests/docker-compose.replication.yml logs
 
       - name: Run Docker replication tests
         run: cargo test --features "full" --test replication_docker -- --ignored --test-threads=1 --nocapture
