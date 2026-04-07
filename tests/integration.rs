@@ -3469,7 +3469,11 @@ async fn compact_feature_not_enabled_returns_400() {
         .unwrap();
 
     let status = resp.status().as_u16();
-    let expected = if cfg!(feature = "compact-store") { 200 } else { 400 };
+    let expected = if cfg!(feature = "compact-store") {
+        200
+    } else {
+        400
+    };
     assert_eq!(status, expected, "unexpected status: {status}");
 }
 

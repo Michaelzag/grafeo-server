@@ -492,8 +492,7 @@ impl DatabaseManager {
         match Arc::try_unwrap(entry) {
             Ok(db_entry) => {
                 if Arc::strong_count(&db_entry.db) != 1 {
-                    self.databases
-                        .insert(name.to_string(), Arc::new(db_entry));
+                    self.databases.insert(name.to_string(), Arc::new(db_entry));
                     return Err(ServiceError::Conflict(
                         "database is in use by active sessions, cannot compact".to_string(),
                     ));

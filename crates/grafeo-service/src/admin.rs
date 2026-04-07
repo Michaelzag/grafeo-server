@@ -358,7 +358,7 @@ impl AdminService {
 
         #[cfg(feature = "compact-store")]
         {
-            use std::panic::{catch_unwind, AssertUnwindSafe};
+            use std::panic::{AssertUnwindSafe, catch_unwind};
             use std::sync::Arc;
 
             let mut db_entry = databases.take_exclusive(db_name)?;
@@ -371,8 +371,7 @@ impl AdminService {
                         return Err((
                             db_entry,
                             ServiceError::Conflict(
-                                "inner Arc<GrafeoDB> still shared after take_exclusive"
-                                    .to_string(),
+                                "inner Arc<GrafeoDB> still shared after take_exclusive".to_string(),
                             ),
                         ));
                     }
