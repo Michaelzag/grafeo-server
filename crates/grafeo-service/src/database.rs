@@ -476,6 +476,44 @@ impl DatabaseManager {
         result
     }
 
+    /// Removes a database entry for exclusive access (e.g. compaction).
+    ///
+    /// Returns the owned `DatabaseEntry` after verifying exclusive ownership
+    /// of both the outer and inner Arcs. The entry is removed from the
+    /// registry, so the caller **must** re-insert it via [`reinsert`] when
+    /// done, even on failure.
+    #[cfg(feature = "compact-store")]
+    pub fn take_exclusive(&self, name: &str) -> Result<DatabaseEntry, ServiceError> {
+        let (_, entry) = self
+            .databases
+            .remove(name)
+            .ok_or_else(|| ServiceError::NotFound(format!("database '{name}' not found")))?;
+
+        match Arc::try_unwrap(entry) {
+            Ok(db_entry) => {
+                if Arc::strong_count(&db_entry.db) != 1 {
+                    self.databases.insert(name.to_string(), Arc::new(db_entry));
+                    return Err(ServiceError::Conflict(
+                        "database is in use by active sessions, cannot compact".to_string(),
+                    ));
+                }
+                Ok(db_entry)
+            }
+            Err(still_shared) => {
+                self.databases.insert(name.to_string(), still_shared);
+                Err(ServiceError::Conflict(
+                    "database is in use by active sessions, cannot compact".to_string(),
+                ))
+            }
+        }
+    }
+
+    /// Re-inserts a database entry previously removed via [`take_exclusive`].
+    #[cfg(feature = "compact-store")]
+    pub fn reinsert(&self, name: String, entry: DatabaseEntry) {
+        self.databases.insert(name, Arc::new(entry));
+    }
+
     /// Returns the data directory, if configured.
     pub fn data_dir(&self) -> Option<&Path> {
         self.data_dir.as_deref()

@@ -2372,7 +2372,7 @@ async fn gwp_list_schemas() {
 
 #[cfg(feature = "gwp")]
 #[tokio::test]
-async fn gwp_schema_operations_return_errors() {
+async fn gwp_schema_operations() {
     let (_http, gwp_endpoint) = spawn_server_with_gwp().await;
 
     let conn = gwp::client::GqlConnection::connect(&gwp_endpoint)
@@ -2380,24 +2380,35 @@ async fn gwp_schema_operations_return_errors() {
         .unwrap();
     let mut catalog_client = conn.create_catalog_client();
 
-    // Creating default schema with if_not_exists should succeed (no-op)
-    catalog_client.create_schema("default", true).await.unwrap();
+    // Creating a new schema should succeed.
+    catalog_client
+        .create_schema("analytics", false)
+        .await
+        .unwrap();
 
-    // Creating default schema without if_not_exists should fail
-    let result = catalog_client.create_schema("default", false).await;
-    assert!(result.is_err());
+    // Creating it again with if_not_exists should succeed (no-op).
+    catalog_client
+        .create_schema("analytics", true)
+        .await
+        .unwrap();
 
-    // Creating a non-default schema should fail (not supported)
-    let result = catalog_client.create_schema("other", false).await;
-    assert!(result.is_err());
+    // Dropping it should succeed.
+    let dropped = catalog_client
+        .drop_schema("analytics", false)
+        .await
+        .unwrap();
+    assert!(dropped);
 
-    // Dropping default schema should fail
-    let result = catalog_client.drop_schema("default", false).await;
-    assert!(result.is_err());
-
-    // Dropping nonexistent schema should fail
+    // Dropping nonexistent schema without if_exists should fail.
     let result = catalog_client.drop_schema("nonexistent", false).await;
     assert!(result.is_err());
+
+    // Dropping nonexistent schema with if_exists should succeed (no-op).
+    let dropped = catalog_client
+        .drop_schema("nonexistent", true)
+        .await
+        .unwrap();
+    assert!(!dropped);
 }
 
 #[cfg(feature = "gwp")]
@@ -3311,6 +3322,179 @@ async fn named_graphs_database_not_found() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 404);
+}
+
+// ---------------------------------------------------------------------------
+// Schema namespace endpoints
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn schema_namespace_crud() {
+    let base = spawn_server().await;
+    let client = Client::new();
+
+    // List schemas on a fresh database (may be empty).
+    let resp = client
+        .get(format!("{base}/db/default/schemas"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert!(body["schemas"].is_array());
+
+    // Create a schema.
+    let resp = client
+        .post(format!("{base}/db/default/schemas"))
+        .json(&json!({ "name": "analytics" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["created"], true);
+
+    // List schemas should include the new schema.
+    let resp = client
+        .get(format!("{base}/db/default/schemas"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    let schemas = body["schemas"].as_array().unwrap();
+    assert!(schemas.iter().any(|s| s.as_str() == Some("analytics")));
+
+    // Drop the schema.
+    let resp = client
+        .delete(format!("{base}/db/default/schemas/analytics"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["dropped"], true);
+}
+
+#[tokio::test]
+async fn schema_namespace_database_not_found() {
+    let base = spawn_server().await;
+    let client = Client::new();
+
+    let resp = client
+        .get(format!("{base}/db/nonexistent/schemas"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+// ---------------------------------------------------------------------------
+// Bulk import endpoints
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn import_tsv_creates_nodes_and_edges() {
+    let base = spawn_server().await;
+    let client = Client::new();
+
+    let resp = client
+        .post(format!("{base}/db/default/import/tsv"))
+        .json(&json!({
+            "data": "1\t2\n2\t3\n3\t1",
+            "edge_type": "CONNECTS",
+            "directed": true
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["nodes_created"], 3);
+    assert_eq!(body["edges_created"], 3);
+}
+
+#[tokio::test]
+async fn import_tsv_undirected_doubles_edges() {
+    let base = spawn_server().await;
+    let client = Client::new();
+
+    let resp = client
+        .post(format!("{base}/db/default/import/tsv"))
+        .json(&json!({
+            "data": "1\t2\n2\t3",
+            "edge_type": "LINK",
+            "directed": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["nodes_created"], 3);
+    assert_eq!(body["edges_created"], 4); // 2 edges x 2 directions
+}
+
+#[tokio::test]
+async fn import_tsv_database_not_found() {
+    let base = spawn_server().await;
+    let client = Client::new();
+
+    let resp = client
+        .post(format!("{base}/db/nonexistent/import/tsv"))
+        .json(&json!({
+            "data": "1\t2",
+            "edge_type": "E",
+            "directed": true
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+// ---------------------------------------------------------------------------
+// Compact endpoint
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn compact_feature_not_enabled_returns_400() {
+    let base = spawn_server().await;
+    let client = Client::new();
+
+    let resp = client
+        .post(format!("{base}/admin/default/compact"))
+        .send()
+        .await
+        .unwrap();
+
+    let status = resp.status().as_u16();
+    let expected = if cfg!(feature = "compact-store") {
+        200
+    } else {
+        400
+    };
+    assert_eq!(status, expected, "unexpected status: {status}");
+}
+
+#[tokio::test]
+async fn compact_not_found() {
+    let base = spawn_server().await;
+    let client = Client::new();
+
+    let resp = client
+        .post(format!("{base}/admin/nonexistent/compact"))
+        .send()
+        .await
+        .unwrap();
+
+    // 404 (database not found) or 400 (feature not enabled).
+    let status = resp.status().as_u16();
+    assert!(
+        (cfg!(feature = "compact-store") && status == 404)
+            || (!cfg!(feature = "compact-store") && status == 400),
+        "unexpected status: {status}"
+    );
 }
 
 // ---------------------------------------------------------------------------

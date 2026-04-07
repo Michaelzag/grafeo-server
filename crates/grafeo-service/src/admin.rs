@@ -4,6 +4,7 @@
 
 use crate::database::DatabaseManager;
 use crate::error::ServiceError;
+use crate::metrics::Metrics;
 use crate::types;
 
 /// Stateless admin operations.
@@ -339,6 +340,219 @@ impl AdminService {
         })
         .await
         .map_err(|e| ServiceError::Internal(e.to_string()))
+    }
+
+    /// Compact a database into a read-only columnar store.
+    ///
+    /// This is a **one-way operation**: the database becomes permanently
+    /// read-only after compaction. The columnar format uses significantly
+    /// less memory and is optimized for analytical read workloads.
+    ///
+    /// Requires exclusive access to the database (no active sessions or
+    /// concurrent requests holding a reference).
+    #[allow(clippy::unused_async)] // async needed when compact-store is enabled
+    pub async fn compact(databases: &DatabaseManager, db_name: &str) -> Result<(), ServiceError> {
+        if databases.is_read_only() {
+            return Err(ServiceError::ReadOnly);
+        }
+
+        #[cfg(feature = "compact-store")]
+        {
+            use std::panic::{AssertUnwindSafe, catch_unwind};
+            use std::sync::Arc;
+
+            let mut db_entry = databases.take_exclusive(db_name)?;
+            let name = db_name.to_owned();
+
+            let result = tokio::task::spawn_blocking(move || {
+                let db = match Arc::get_mut(&mut db_entry.db) {
+                    Some(db) => db,
+                    None => {
+                        return Err((
+                            db_entry,
+                            ServiceError::Conflict(
+                                "inner Arc<GrafeoDB> still shared after take_exclusive".to_string(),
+                            ),
+                        ));
+                    }
+                };
+
+                match catch_unwind(AssertUnwindSafe(|| db.compact())) {
+                    Ok(Ok(())) => {
+                        db_entry.metadata.storage_mode = "compact".to_string();
+                        Ok(db_entry)
+                    }
+                    Ok(Err(e)) => Err((
+                        db_entry,
+                        ServiceError::Internal(format!("compaction failed: {e}")),
+                    )),
+                    Err(_panic) => Err((
+                        db_entry,
+                        ServiceError::Internal("compaction panicked".to_string()),
+                    )),
+                }
+            })
+            .await
+            .expect("compact: spawn_blocking task should not be cancelled");
+
+            match result {
+                Ok(compacted) => {
+                    databases.reinsert(name.clone(), compacted);
+                    tracing::info!(name = %name, "Database compacted to columnar read-only store");
+                    Ok(())
+                }
+                Err((original, err)) => {
+                    databases.reinsert(name, original);
+                    Err(err)
+                }
+            }
+        }
+        #[cfg(not(feature = "compact-store"))]
+        {
+            let _ = db_name;
+            Err(ServiceError::BadRequest(
+                "compact-store feature not enabled".to_string(),
+            ))
+        }
+    }
+
+    /// Bulk-import a TSV edge list into a database.
+    ///
+    /// Bypasses per-edge transaction overhead by batching all operations
+    /// into a single transaction, achieving 10-100x throughput over
+    /// individual inserts for large graphs.
+    pub async fn import_tsv(
+        databases: &DatabaseManager,
+        db_name: &str,
+        data: String,
+        edge_type: String,
+        directed: bool,
+    ) -> Result<types::ImportResponse, ServiceError> {
+        if databases.is_read_only() {
+            return Err(ServiceError::ReadOnly);
+        }
+
+        let entry = databases
+            .get(db_name)
+            .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
+
+        let (nodes_created, edges_created) = tokio::task::spawn_blocking(move || {
+            entry.db.import_tsv_str(&data, &edge_type, directed)
+        })
+        .await
+        .map_err(|e| ServiceError::Internal(e.to_string()))?
+        .map_err(|e| ServiceError::BadRequest(e.to_string()))?;
+
+        Ok(types::ImportResponse {
+            nodes_created,
+            edges_created,
+        })
+    }
+
+    // -----------------------------------------------------------------------
+    // Schema management (ISO/IEC 39075 Section 4.2.5)
+    // -----------------------------------------------------------------------
+
+    /// List all schema namespaces in a database.
+    pub async fn list_schemas(
+        databases: &DatabaseManager,
+        metrics: &Metrics,
+        db_name: &str,
+    ) -> Result<Vec<String>, ServiceError> {
+        let result = crate::query::QueryService::execute(
+            databases,
+            metrics,
+            db_name,
+            "SHOW SCHEMAS",
+            Some("gql"),
+            None,
+            None,
+            false,
+        )
+        .await?;
+
+        Ok(result
+            .rows
+            .into_iter()
+            .filter_map(|row| {
+                row.into_iter()
+                    .next()
+                    .and_then(|v| v.as_str().map(str::to_owned))
+            })
+            .collect())
+    }
+
+    /// Create a new schema namespace in a database.
+    ///
+    /// Returns `true` if the schema was created, `false` if it already existed.
+    /// Only "already exists" errors are converted to `Ok(false)`: real failures
+    /// (database not found, internal errors) propagate as `Err`.
+    pub async fn create_schema(
+        databases: &DatabaseManager,
+        metrics: &Metrics,
+        db_name: &str,
+        schema_name: &str,
+    ) -> Result<bool, ServiceError> {
+        if databases.is_read_only() {
+            return Err(ServiceError::ReadOnly);
+        }
+
+        let result = crate::query::QueryService::execute(
+            databases,
+            metrics,
+            db_name,
+            &format!("CREATE SCHEMA {schema_name}"),
+            Some("gql"),
+            None,
+            None,
+            false,
+        )
+        .await;
+
+        match result {
+            Ok(_) => Ok(true),
+            Err(ref e) if e.to_string().contains("already exists") => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Drop a schema namespace from a database.
+    ///
+    /// Returns `true` if the schema existed and was dropped, `false` if the
+    /// schema was not found. Only "not found" errors are converted to
+    /// `Ok(false)`: real failures propagate as `Err`.
+    pub async fn drop_schema(
+        databases: &DatabaseManager,
+        metrics: &Metrics,
+        db_name: &str,
+        schema_name: &str,
+    ) -> Result<bool, ServiceError> {
+        if databases.is_read_only() {
+            return Err(ServiceError::ReadOnly);
+        }
+
+        let result = crate::query::QueryService::execute(
+            databases,
+            metrics,
+            db_name,
+            &format!("DROP SCHEMA {schema_name}"),
+            Some("gql"),
+            None,
+            None,
+            false,
+        )
+        .await;
+
+        match result {
+            Ok(_) => Ok(true),
+            Err(ref e)
+                if e.to_string().contains("not found")
+                    || e.to_string().contains("does not exist") =>
+            {
+                Ok(false)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Write a point-in-time snapshot to the `.grafeo` database file.
