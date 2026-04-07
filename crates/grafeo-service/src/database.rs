@@ -490,7 +490,16 @@ impl DatabaseManager {
             .ok_or_else(|| ServiceError::NotFound(format!("database '{name}' not found")))?;
 
         match Arc::try_unwrap(entry) {
-            Ok(db_entry) => Ok(db_entry),
+            Ok(db_entry) => {
+                if Arc::strong_count(&db_entry.db) != 1 {
+                    self.databases
+                        .insert(name.to_string(), Arc::new(db_entry));
+                    return Err(ServiceError::Conflict(
+                        "database is in use by active sessions, cannot compact".to_string(),
+                    ));
+                }
+                Ok(db_entry)
+            }
             Err(still_shared) => {
                 self.databases.insert(name.to_string(), still_shared);
                 Err(ServiceError::Conflict(

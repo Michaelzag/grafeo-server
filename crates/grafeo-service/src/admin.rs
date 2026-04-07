@@ -371,7 +371,8 @@ impl AdminService {
                         return Err((
                             db_entry,
                             ServiceError::Conflict(
-                                "database is in use by active sessions, cannot compact".to_string(),
+                                "inner Arc<GrafeoDB> still shared after take_exclusive"
+                                    .to_string(),
                             ),
                         ));
                     }
