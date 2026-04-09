@@ -34,6 +34,10 @@ pub enum ServiceError {
     #[error("too many requests")]
     TooManyRequests,
 
+    /// Token does not have permission for this operation or database.
+    #[error("{0}")]
+    Forbidden(String),
+
     /// Operation rejected because server is in read-only mode.
     #[error("server is in read-only mode")]
     ReadOnly,

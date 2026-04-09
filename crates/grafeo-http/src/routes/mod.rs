@@ -13,5 +13,7 @@ pub mod sparql_protocol;
 #[cfg(feature = "sync")]
 pub mod sync;
 pub mod system;
+#[cfg(feature = "auth")]
+pub mod tokens;
 pub mod transaction;
 pub mod websocket;

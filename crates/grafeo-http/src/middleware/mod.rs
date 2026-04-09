@@ -2,6 +2,7 @@
 
 #[cfg(feature = "auth")]
 pub mod auth;
+pub mod auth_context;
 pub mod rate_limit;
 #[cfg(feature = "replication")]
 pub mod replica_guard;

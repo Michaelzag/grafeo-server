@@ -10,7 +10,6 @@
 //! **Zero transport dependencies** — no axum, no tonic, no wire-protocol code.
 
 pub mod admin;
-#[cfg(feature = "auth")]
 pub mod auth;
 pub mod backup;
 #[cfg(feature = "push-changefeed")]
@@ -30,6 +29,10 @@ pub mod session;
 pub mod stream;
 #[cfg(feature = "sync")]
 pub mod sync;
+#[cfg(feature = "auth")]
+pub mod token_service;
+#[cfg(feature = "auth")]
+pub mod token_store;
 pub mod types;
 
 use std::path::{Path, PathBuf};
@@ -59,6 +62,8 @@ pub struct ServiceConfig {
     pub auth_user: Option<String>,
     #[cfg(feature = "auth")]
     pub auth_password: Option<String>,
+    #[cfg(feature = "auth")]
+    pub token_store_path: Option<String>,
     #[cfg(feature = "replication")]
     pub replication_mode: replication::ReplicationMode,
     /// Directory for storing database backups.
@@ -124,11 +129,32 @@ impl ServiceState {
                 start_time: Instant::now(),
                 read_only: config.read_only,
                 #[cfg(feature = "auth")]
-                auth: auth::AuthProvider::new(
-                    config.auth_token.clone(),
-                    config.auth_user.clone(),
-                    config.auth_password.clone(),
-                ),
+                auth: {
+                    // Resolve token store path: explicit > {data_dir}/tokens.json > None
+                    let store_path = config.token_store_path.clone().or_else(|| {
+                        config.data_dir.as_ref().map(|d| {
+                            PathBuf::from(d).join("tokens.json").to_string_lossy().into_owned()
+                        })
+                    });
+                    if let Some(ref path) = store_path {
+                        let store = Arc::new(
+                            token_store::TokenStore::load(path)
+                                .unwrap_or_else(|e| panic!("failed to load token store: {e}"))
+                        );
+                        auth::AuthProvider::with_token_store(
+                            config.auth_token.clone(),
+                            config.auth_user.clone(),
+                            config.auth_password.clone(),
+                            store,
+                        )
+                    } else {
+                        auth::AuthProvider::new(
+                            config.auth_token.clone(),
+                            config.auth_user.clone(),
+                            config.auth_password.clone(),
+                        )
+                    }
+                },
                 #[cfg(feature = "push-changefeed")]
                 change_hub: changefeed::ChangeHub::new(),
                 #[cfg(feature = "replication")]

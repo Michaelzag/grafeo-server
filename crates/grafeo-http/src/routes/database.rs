@@ -4,6 +4,7 @@ use axum::extract::{Json, Path, State};
 use axum::response::IntoResponse;
 
 use crate::error::{ApiError, ErrorBody};
+use crate::middleware::auth_context::AuthContext;
 use crate::state::AppState;
 use crate::types::{
     CreateDatabaseRequest, DatabaseInfoResponse, DatabaseSchemaResponse, DatabaseStatsResponse,
@@ -46,8 +47,10 @@ pub async fn list_databases(State(state): State<AppState>) -> impl IntoResponse 
 )]
 pub async fn create_database(
     State(state): State<AppState>,
+    auth: AuthContext,
     Json(req): Json<CreateDatabaseRequest>,
 ) -> Result<Json<DatabaseSummary>, ApiError> {
+    auth.check_write()?;
     let name = req.name.clone();
     let db_type = req.database_type;
     state.databases().create(&req)?;
@@ -85,8 +88,10 @@ pub async fn create_database(
 )]
 pub async fn delete_database(
     State(state): State<AppState>,
+    auth: AuthContext,
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.check_write()?;
     // Clean up any transaction sessions belonging to this database
     state.sessions().remove_by_database(&name);
     state.databases().delete(&name)?;

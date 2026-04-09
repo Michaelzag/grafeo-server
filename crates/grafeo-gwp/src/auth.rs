@@ -26,7 +26,8 @@ impl AuthValidator for GwpAuthValidator {
 
         match &credentials.method {
             Some(Method::BearerToken(token)) => {
-                if self.provider.check_bearer(token) {
+                if self.provider.check_bearer(token).is_some() {
+                    // TODO: per-query scope enforcement for GWP sessions
                     Ok(())
                 } else {
                     Err(GqlError::Protocol("invalid bearer token".to_owned()))

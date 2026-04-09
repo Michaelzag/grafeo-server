@@ -51,6 +51,12 @@ pub struct Config {
     #[arg(long, env = "GRAFEO_AUTH_PASSWORD", requires = "auth_user")]
     pub auth_password: Option<String>,
 
+    /// Path to token store JSON file for managed API keys.
+    /// Default: {data_dir}/tokens.json when --data-dir is set.
+    #[cfg(feature = "auth")]
+    #[arg(long, env = "GRAFEO_TOKEN_STORE_PATH")]
+    pub token_store_path: Option<String>,
+
     /// GQL Wire Protocol (gRPC) port.
     #[cfg(feature = "gwp")]
     #[arg(long, default_value_t = 7688, env = "GRAFEO_GWP_PORT")]
