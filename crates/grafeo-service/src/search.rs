@@ -19,8 +19,7 @@ impl SearchService {
         req: types::VectorSearchReq,
     ) -> Result<Vec<types::SearchHit>, ServiceError> {
         let entry = databases
-            .get(db_name)
-            .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
+            .get_available(db_name)?;
 
         let results = tokio::task::spawn_blocking(move || {
             let filters = if req.filters.is_empty() {
@@ -28,7 +27,7 @@ impl SearchService {
             } else {
                 Some(req.filters)
             };
-            entry.db.vector_search(
+            entry.db().vector_search(
                 &req.label,
                 &req.property,
                 &req.query_vector,
@@ -72,12 +71,11 @@ impl SearchService {
         req: types::TextSearchReq,
     ) -> Result<Vec<types::SearchHit>, ServiceError> {
         let entry = databases
-            .get(db_name)
-            .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
+            .get_available(db_name)?;
 
         let results = tokio::task::spawn_blocking(move || {
             entry
-                .db
+                .db()
                 .text_search(&req.label, &req.property, &req.query, req.k as usize)
         })
         .await
@@ -115,8 +113,7 @@ impl SearchService {
         req: types::HybridSearchReq,
     ) -> Result<Vec<types::SearchHit>, ServiceError> {
         let entry = databases
-            .get(db_name)
-            .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
+            .get_available(db_name)?;
 
         let results = tokio::task::spawn_blocking(move || {
             let query_vec = if req.query_vector.is_empty() {
@@ -124,7 +121,7 @@ impl SearchService {
             } else {
                 Some(req.query_vector)
             };
-            entry.db.hybrid_search(
+            entry.db().hybrid_search(
                 &req.label,
                 &req.text_property,
                 &req.vector_property,
