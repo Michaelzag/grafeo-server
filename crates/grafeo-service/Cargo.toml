@@ -21,6 +21,10 @@ base64 = { workspace = true }
 # JSON (always needed for SearchHit properties)
 serde_json = "1"
 
+# Cron schedule parsing (for backup scheduler)
+cron = "0.15"
+chrono = "0.4"
+
 # Schema loading (optional)
 sophia_turtle = { version = "0.9", optional = true }
 sophia_api = { version = "0.9", optional = true }

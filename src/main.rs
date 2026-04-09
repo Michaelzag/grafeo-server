@@ -60,6 +60,9 @@ async fn main() {
         auth_password: config.auth_password.clone(),
         #[cfg(feature = "replication")]
         replication_mode,
+        backup_dir: config.backup_dir.clone(),
+        backup_retention: config.backup_retention,
+        backup_schedule: config.backup_schedule.clone(),
     };
 
     let service = ServiceState::new(&service_config);
@@ -87,6 +90,21 @@ async fn main() {
             cleanup_state.cleanup_rate_limits();
         }
     });
+
+    // Spawn backup scheduler if configured
+    if let (Some(schedule), Some(backup_dir)) =
+        (service.backup_schedule(), service.backup_dir())
+    {
+        let backup_dir = backup_dir.to_path_buf();
+        let retention = service.backup_retention();
+        grafeo_service::scheduler::start(
+            schedule.to_string(),
+            service.clone(),
+            backup_dir,
+            retention,
+        );
+        tracing::info!("Backup scheduler configured");
+    }
 
     // Spawn replication background task (no-op unless in Replica mode)
     #[cfg(feature = "replication")]

@@ -514,6 +514,21 @@ impl DatabaseManager {
         self.databases.insert(name, Arc::new(entry));
     }
 
+    /// Removes a database entry from the registry without closing or deleting it.
+    ///
+    /// Used by backup/restore to temporarily take ownership of a database.
+    /// The caller is responsible for reinserting or closing the database.
+    pub fn remove(&self, name: &str) -> Option<(String, Arc<DatabaseEntry>)> {
+        self.databases.remove(name)
+    }
+
+    /// Inserts a database entry into the registry.
+    ///
+    /// Used by backup/restore to reinsert a database after restore.
+    pub fn insert(&self, name: String, entry: Arc<DatabaseEntry>) {
+        self.databases.insert(name, entry);
+    }
+
     /// Returns the data directory, if configured.
     pub fn data_dir(&self) -> Option<&Path> {
         self.data_dir.as_deref()
