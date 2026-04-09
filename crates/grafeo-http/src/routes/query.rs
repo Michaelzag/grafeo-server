@@ -11,20 +11,20 @@ use grafeo_service::query::QueryService;
 
 use crate::encode::{convert_json_params, streaming_json_response};
 use crate::error::{ApiError, ErrorBody};
+use crate::middleware::auth_context::AuthContext;
 use crate::state::AppState;
 use crate::types::{QueryRequest, QueryResponse};
 
 /// Shared implementation for all auto-commit query endpoints.
-///
-/// Returns the raw `QueryResult` so callers can stream the response
-/// without materializing the full JSON in memory.
 async fn execute_query(
     state: &AppState,
+    auth: &AuthContext,
     req: &QueryRequest,
     lang_override: Option<&str>,
 ) -> Result<QueryResult, ApiError> {
     let language = lang_override.or(req.language.as_deref());
     let db_name = grafeo_service::resolve_db_name(req.database.as_deref());
+    auth.check_db_access(db_name)?;
     let params = convert_json_params(req.params.as_ref())?;
     let timeout = state.effective_timeout(req.timeout_ms);
 
@@ -61,10 +61,11 @@ async fn execute_query(
 )]
 pub async fn query(
     State(state): State<AppState>,
+    auth: AuthContext,
     Json(req): Json<QueryRequest>,
 ) -> Result<Response, ApiError> {
     Ok(streaming_json_response(
-        execute_query(&state, &req, None).await?,
+        execute_query(&state, &auth, &req, None).await?,
     ))
 }
 
@@ -82,10 +83,11 @@ pub async fn query(
 )]
 pub async fn cypher(
     State(state): State<AppState>,
+    auth: AuthContext,
     Json(req): Json<QueryRequest>,
 ) -> Result<Response, ApiError> {
     Ok(streaming_json_response(
-        execute_query(&state, &req, Some("cypher")).await?,
+        execute_query(&state, &auth, &req, Some("cypher")).await?,
     ))
 }
 
@@ -103,10 +105,11 @@ pub async fn cypher(
 )]
 pub async fn graphql(
     State(state): State<AppState>,
+    auth: AuthContext,
     Json(req): Json<QueryRequest>,
 ) -> Result<Response, ApiError> {
     Ok(streaming_json_response(
-        execute_query(&state, &req, Some("graphql")).await?,
+        execute_query(&state, &auth, &req, Some("graphql")).await?,
     ))
 }
 
@@ -124,10 +127,11 @@ pub async fn graphql(
 )]
 pub async fn gremlin(
     State(state): State<AppState>,
+    auth: AuthContext,
     Json(req): Json<QueryRequest>,
 ) -> Result<Response, ApiError> {
     Ok(streaming_json_response(
-        execute_query(&state, &req, Some("gremlin")).await?,
+        execute_query(&state, &auth, &req, Some("gremlin")).await?,
     ))
 }
 
@@ -145,10 +149,11 @@ pub async fn gremlin(
 )]
 pub async fn sparql(
     State(state): State<AppState>,
+    auth: AuthContext,
     Json(req): Json<QueryRequest>,
 ) -> Result<Response, ApiError> {
     Ok(streaming_json_response(
-        execute_query(&state, &req, Some("sparql")).await?,
+        execute_query(&state, &auth, &req, Some("sparql")).await?,
     ))
 }
 
@@ -169,9 +174,10 @@ pub async fn sparql(
 )]
 pub async fn sql(
     State(state): State<AppState>,
+    auth: AuthContext,
     Json(req): Json<QueryRequest>,
 ) -> Result<Response, ApiError> {
     Ok(streaming_json_response(
-        execute_query(&state, &req, Some("sql-pgq")).await?,
+        execute_query(&state, &auth, &req, Some("sql-pgq")).await?,
     ))
 }

@@ -126,6 +126,26 @@ export interface BackupEntry {
   epoch: number;
 }
 
+// Token management types
+
+export interface TokenScope {
+  role: string;
+  databases: string[];
+}
+
+export interface TokenResponse {
+  id: string;
+  name: string;
+  scope: TokenScope;
+  created_at: string;
+  token?: string;
+}
+
+export interface CreateTokenRequest {
+  name: string;
+  scope?: TokenScope;
+}
+
 export interface ResourceDefaults {
   memory_limit_bytes: number;
   storage_mode: string;

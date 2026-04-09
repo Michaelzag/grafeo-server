@@ -66,6 +66,10 @@ impl ApiError {
         Self(ServiceError::TooManyRequests)
     }
 
+    pub fn forbidden(msg: impl Into<String>) -> Self {
+        Self(ServiceError::Forbidden(msg.into()))
+    }
+
     pub fn internal(msg: impl Into<String>) -> Self {
         Self(ServiceError::Internal(msg.into()))
     }
@@ -96,6 +100,9 @@ impl IntoResponse for ApiError {
             ServiceError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized", None),
             ServiceError::TooManyRequests => {
                 (StatusCode::TOO_MANY_REQUESTS, "too_many_requests", None)
+            }
+            ServiceError::Forbidden(msg) => {
+                (StatusCode::FORBIDDEN, "forbidden", Some(msg.clone()))
             }
             ServiceError::ReadOnly => (
                 StatusCode::FORBIDDEN,

@@ -58,6 +58,8 @@ async fn main() {
         auth_user: config.auth_user.clone(),
         #[cfg(feature = "auth")]
         auth_password: config.auth_password.clone(),
+        #[cfg(feature = "auth")]
+        token_store_path: config.token_store_path.clone(),
         #[cfg(feature = "replication")]
         replication_mode,
         backup_dir: config.backup_dir.clone(),

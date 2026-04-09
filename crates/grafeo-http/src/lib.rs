@@ -252,6 +252,18 @@ pub fn router(state: AppState) -> Router {
         .route("/system/resources", get(routes::system::system_resources))
         .route("/metrics", get(routes::system::metrics_endpoint));
 
+    // Token management (requires `auth` feature)
+    #[cfg(feature = "auth")]
+    let api = api
+        .route(
+            "/admin/tokens",
+            get(routes::tokens::list_tokens).post(routes::tokens::create_token),
+        )
+        .route(
+            "/admin/tokens/{id}",
+            get(routes::tokens::get_token).delete(routes::tokens::delete_token),
+        );
+
     // Sync: offline-first changefeed + apply (requires `sync` feature, implies `cdc`)
     #[cfg(feature = "sync")]
     let api = api

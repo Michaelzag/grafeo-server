@@ -454,6 +454,59 @@ pub struct RestoreRequest {
 }
 
 // ============================================================================
+// Token management types
+// ============================================================================
+
+/// Request to create a new API token.
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CreateTokenRequest {
+    /// Human-readable name for the token.
+    pub name: String,
+    /// Permission scope.
+    #[serde(default)]
+    pub scope: TokenScopeRequest,
+}
+
+/// Scope definition in a create/update request.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct TokenScopeRequest {
+    /// Permission level: "admin", "read-write", "read-only".
+    #[serde(default = "default_admin_role")]
+    pub role: String,
+    /// Databases this token can access. Empty = all databases.
+    #[serde(default)]
+    pub databases: Vec<String>,
+}
+
+impl Default for TokenScopeRequest {
+    fn default() -> Self {
+        Self {
+            role: "admin".to_string(),
+            databases: vec![],
+        }
+    }
+}
+
+fn default_admin_role() -> String {
+    "admin".to_string()
+}
+
+/// Token response (returned from list/get/create endpoints).
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct TokenResponse {
+    pub id: String,
+    pub name: String,
+    pub scope: TokenScopeRequest,
+    pub created_at: String,
+    /// The plaintext token. Only present in the create response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+}
+
+// ============================================================================
 // Named graph types
 // ============================================================================
 

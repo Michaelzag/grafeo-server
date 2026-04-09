@@ -13,6 +13,8 @@ import type {
   WalStatusInfo,
   ValidationInfo,
   BackupEntry,
+  TokenResponse,
+  CreateTokenRequest,
 } from "../types/api";
 
 export class GrafeoApiError extends Error {
@@ -179,5 +181,23 @@ export const api = {
 
     downloadUrl: (filename: string) =>
       `/admin/backups/download/${encodeURIComponent(filename)}`,
+  },
+
+  tokens: {
+    list: () => request<TokenResponse[]>("/admin/tokens"),
+
+    create: (req: CreateTokenRequest) =>
+      request<TokenResponse>("/admin/tokens", {
+        method: "POST",
+        body: JSON.stringify(req),
+      }),
+
+    get: (id: string) =>
+      request<TokenResponse>(`/admin/tokens/${encodeURIComponent(id)}`),
+
+    delete: (id: string) =>
+      request<{ deleted: boolean }>(`/admin/tokens/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      }),
   },
 };

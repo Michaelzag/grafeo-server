@@ -3,16 +3,62 @@
 //! Credential extraction is transport-specific (HTTP headers, gRPC metadata,
 //! Bolt LOGON). This module only handles credential verification.
 
+use serde::{Deserialize, Serialize};
 #[cfg(feature = "auth")]
 use subtle::ConstantTimeEq;
 
-/// Authentication provider supporting bearer tokens and HTTP Basic auth.
+/// Permission scope for a token: role + database restrictions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct TokenScope {
+    /// Permission level: "admin", "read-write", "read-only".
+    pub role: String,
+    /// Databases this token can access. Empty vec = all databases.
+    #[serde(default)]
+    pub databases: Vec<String>,
+}
+
+impl Default for TokenScope {
+    fn default() -> Self {
+        Self {
+            role: "admin".to_string(),
+            databases: vec![],
+        }
+    }
+}
+
+/// On-disk record (hashed token, never the plaintext).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenRecord {
+    pub id: String,
+    pub name: String,
+    pub token_hash: String,
+    pub scope: TokenScope,
+    pub created_at: String,
+}
+
+/// In-flight identity attached to a request after authentication.
+#[derive(Debug, Clone)]
+pub struct TokenInfo {
+    pub id: String,
+    pub name: String,
+    pub scope: TokenScope,
+}
+
+/// Authentication provider supporting bearer tokens, token store, and HTTP Basic auth.
+///
+/// `check_bearer` checks the legacy single token first (from `--auth-token`),
+/// then the token store. Returns `Option<TokenInfo>` with the token's scope.
+/// Basic auth always returns admin scope.
 #[cfg(feature = "auth")]
 #[derive(Clone)]
 pub struct AuthProvider {
+    /// Legacy single bearer token (from --auth-token CLI flag).
     bearer_token: Option<String>,
     basic_user: Option<String>,
     basic_password: Option<String>,
+    /// Token store for managed API keys (from token CRUD API).
+    token_store: Option<std::sync::Arc<crate::token_store::TokenStore>>,
 }
 
 #[cfg(feature = "auth")]
@@ -31,22 +77,78 @@ impl AuthProvider {
             bearer_token: token,
             basic_user: user,
             basic_password: password,
+            token_store: None,
+        })
+    }
+
+    /// Creates a provider with a token store for managed API keys.
+    pub fn with_token_store(
+        token: Option<String>,
+        user: Option<String>,
+        password: Option<String>,
+        store: std::sync::Arc<crate::token_store::TokenStore>,
+    ) -> Option<Self> {
+        // If we have a store, we always enable auth (even without a legacy token,
+        // managed tokens will authenticate via the store).
+        let has_credentials = token.is_some() || user.is_some();
+        let has_store = true;
+        if !has_credentials && !has_store {
+            return None;
+        }
+        Some(Self {
+            bearer_token: token,
+            basic_user: user,
+            basic_password: password,
+            token_store: Some(store),
         })
     }
 
     /// Whether any authentication method is configured.
     pub fn is_enabled(&self) -> bool {
-        self.bearer_token.is_some() || self.basic_user.is_some()
+        self.bearer_token.is_some() || self.basic_user.is_some() || self.token_store.is_some()
     }
 
-    /// Check a bearer token or API key.
-    pub fn check_bearer(&self, token: &str) -> bool {
-        self.bearer_token
+    /// Returns a reference to the token store, if configured.
+    pub fn token_store(&self) -> Option<&crate::token_store::TokenStore> {
+        self.token_store.as_deref()
+    }
+
+    /// Check a bearer token or API key. Returns token identity on success.
+    ///
+    /// Checks the legacy single token first (admin scope), then the token
+    /// store. Returns `None` if no match.
+    pub fn check_bearer(&self, token: &str) -> Option<TokenInfo> {
+        // Check legacy single token (constant-time)
+        let legacy_match = self
+            .bearer_token
             .as_ref()
-            .is_some_and(|expected| ct_eq(token.as_bytes(), expected.as_bytes()))
+            .is_some_and(|expected| ct_eq(token.as_bytes(), expected.as_bytes()));
+
+        if legacy_match {
+            return Some(TokenInfo {
+                id: "_root".to_string(),
+                name: "root".to_string(),
+                scope: TokenScope::default(), // admin, all databases
+            });
+        }
+
+        // Check token store
+        if let Some(store) = &self.token_store {
+            let hash = crate::token_service::hash_token(token);
+            if let Some(record) = store.find_by_hash(&hash) {
+                return Some(TokenInfo {
+                    id: record.id,
+                    name: record.name,
+                    scope: record.scope,
+                });
+            }
+        }
+
+        None
     }
 
-    /// Check basic auth credentials.
+    /// Check basic auth credentials. Returns true on match.
+    /// Basic auth always grants admin scope (no per-database scoping).
     pub fn check_basic(&self, user: &str, password: &str) -> bool {
         match (&self.basic_user, &self.basic_password) {
             (Some(expected_user), Some(expected_pass)) => {
@@ -117,37 +219,45 @@ mod tests {
     #[test]
     fn check_bearer_exact_match() {
         let p = AuthProvider::new(Some("secret-token".into()), None, None).unwrap();
-        assert!(p.check_bearer("secret-token"));
+        assert!(p.check_bearer("secret-token").is_some());
+    }
+
+    #[test]
+    fn check_bearer_returns_admin_scope() {
+        let p = AuthProvider::new(Some("secret-token".into()), None, None).unwrap();
+        let info = p.check_bearer("secret-token").unwrap();
+        assert_eq!(info.scope.role, "admin");
+        assert!(info.scope.databases.is_empty());
     }
 
     #[test]
     fn check_bearer_mismatch() {
         let p = AuthProvider::new(Some("secret-token".into()), None, None).unwrap();
-        assert!(!p.check_bearer("wrong-token"));
+        assert!(p.check_bearer("wrong-token").is_none());
     }
 
     #[test]
     fn check_bearer_empty_token() {
         let p = AuthProvider::new(Some("secret-token".into()), None, None).unwrap();
-        assert!(!p.check_bearer(""));
+        assert!(p.check_bearer("").is_none());
     }
 
     #[test]
     fn check_bearer_prefix_not_enough() {
         let p = AuthProvider::new(Some("secret-token".into()), None, None).unwrap();
-        assert!(!p.check_bearer("secret"));
+        assert!(p.check_bearer("secret").is_none());
     }
 
     #[test]
     fn check_bearer_case_sensitive() {
         let p = AuthProvider::new(Some("Secret".into()), None, None).unwrap();
-        assert!(!p.check_bearer("secret"));
+        assert!(p.check_bearer("secret").is_none());
     }
 
     #[test]
     fn check_bearer_no_token_configured() {
         let p = AuthProvider::new(None, Some("user".into()), Some("pass".into())).unwrap();
-        assert!(!p.check_bearer("anything"));
+        assert!(p.check_bearer("anything").is_none());
     }
 
     // -----------------------------------------------------------------------

@@ -6,6 +6,7 @@ use axum::http::header;
 use axum::response::IntoResponse;
 
 use crate::error::ApiError;
+use crate::middleware::auth_context::AuthContext;
 use crate::state::AppState;
 
 use grafeo_service::backup::BackupService;
@@ -30,8 +31,10 @@ use grafeo_service::types;
 )]
 pub async fn create_backup(
     State(state): State<AppState>,
+    auth: AuthContext,
     Path(db): Path<String>,
 ) -> Result<Json<types::BackupEntry>, ApiError> {
+    auth.check_admin()?;
     let backup_dir = state
         .backup_dir()
         .ok_or_else(|| {
@@ -66,8 +69,10 @@ pub async fn create_backup(
 )]
 pub async fn list_backups(
     State(state): State<AppState>,
+    auth: AuthContext,
     Path(db): Path<String>,
 ) -> Result<Json<Vec<types::BackupEntry>>, ApiError> {
+    auth.check_admin()?;
     let backup_dir = state
         .backup_dir()
         .ok_or_else(|| {
@@ -93,7 +98,9 @@ pub async fn list_backups(
 )]
 pub async fn list_all_backups(
     State(state): State<AppState>,
+    auth: AuthContext,
 ) -> Result<Json<Vec<types::BackupEntry>>, ApiError> {
+    auth.check_admin()?;
     let backup_dir = state
         .backup_dir()
         .ok_or_else(|| {
@@ -128,9 +135,11 @@ pub async fn list_all_backups(
 )]
 pub async fn restore_backup(
     State(state): State<AppState>,
+    auth: AuthContext,
     Path(db): Path<String>,
     Json(req): Json<types::RestoreRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.check_admin()?;
     let backup_dir = state
         .backup_dir()
         .ok_or_else(|| {
@@ -171,8 +180,10 @@ pub async fn restore_backup(
 )]
 pub async fn delete_backup(
     State(state): State<AppState>,
+    auth: AuthContext,
     Path(filename): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.check_admin()?;
     let backup_dir = state
         .backup_dir()
         .ok_or_else(|| {
@@ -204,8 +215,10 @@ pub async fn delete_backup(
 )]
 pub async fn download_backup(
     State(state): State<AppState>,
+    auth: AuthContext,
     Path(filename): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
+    auth.check_admin()?;
     let backup_dir = state
         .backup_dir()
         .ok_or_else(|| {

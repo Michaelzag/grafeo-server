@@ -20,7 +20,8 @@ impl AuthValidator for BoltrAuthValidator {
         match credentials.scheme.as_str() {
             "bearer" => {
                 let token = credentials.credentials.as_deref().unwrap_or("");
-                if self.provider.check_bearer(token) {
+                if self.provider.check_bearer(token).is_some() {
+                    // TODO: per-query scope enforcement for Bolt sessions
                     Ok(())
                 } else {
                     Err(BoltError::Authentication("invalid bearer token".into()))
