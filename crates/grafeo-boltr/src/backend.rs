@@ -67,9 +67,9 @@ impl BoltBackend for GrafeoBackend {
         let ro = self.state.is_query_read_only();
         let engine_session = tokio::task::spawn_blocking(move || {
             if ro {
-                entry.db.session_read_only()
+                entry.db().session_read_only()
             } else {
-                entry.db.session()
+                entry.db().session()
             }
         })
         .await
@@ -108,9 +108,9 @@ impl BoltBackend for GrafeoBackend {
                 let ro = self.state.is_query_read_only();
                 let engine_session = tokio::task::spawn_blocking(move || {
                     if ro {
-                        entry.db.session_read_only()
+                        entry.db().session_read_only()
                     } else {
-                        entry.db.session()
+                        entry.db().session()
                     }
                 })
                 .await
@@ -135,9 +135,9 @@ impl BoltBackend for GrafeoBackend {
         let ro = self.state.is_query_read_only();
         let engine_session = tokio::task::spawn_blocking(move || {
             if ro {
-                entry.db.session_read_only()
+                entry.db().session_read_only()
             } else {
-                entry.db.session()
+                entry.db().session()
             }
         })
         .await

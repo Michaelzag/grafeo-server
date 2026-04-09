@@ -47,9 +47,9 @@ impl QueryService {
 
         let result = run_with_timeout(timeout, move || {
             let session = if read_only {
-                entry.db.session_read_only()
+                entry.db().session_read_only()
             } else {
-                entry.db.session()
+                entry.db().session()
             };
             dispatch_query(&session, &stmt, lang, params.as_ref())
         })
@@ -120,9 +120,9 @@ impl QueryService {
         let db_name = db_name.to_owned();
         let session_id = tokio::task::spawn_blocking(move || {
             let mut engine_session = if read_only {
-                entry.db.session_read_only()
+                entry.db().session_read_only()
             } else {
-                entry.db.session()
+                entry.db().session()
             };
             engine_session
                 .begin_transaction()
@@ -211,9 +211,9 @@ impl QueryService {
 
         let results = run_with_timeout(timeout, move || {
             let mut session = if read_only {
-                entry.db.session_read_only()
+                entry.db().session_read_only()
             } else {
-                entry.db.session()
+                entry.db().session()
             };
             session
                 .begin_transaction()
@@ -848,7 +848,7 @@ mod tests {
     async fn dispatch_gql() {
         let s = state();
         let entry = s.databases().get("default").unwrap();
-        let session = entry.db.session();
+        let session = entry.db().session();
         let qr =
             QueryService::dispatch(&session, "MATCH (n) RETURN n LIMIT 0", None, None).unwrap();
         assert!(qr.rows.is_empty());
@@ -858,7 +858,7 @@ mod tests {
     async fn dispatch_syntax_error() {
         let s = state();
         let entry = s.databases().get("default").unwrap();
-        let session = entry.db.session();
+        let session = entry.db().session();
         let err = QueryService::dispatch(&session, "TOTALLY BROKEN", None, None).unwrap_err();
         assert!(matches!(err, ServiceError::BadRequest(_)));
     }

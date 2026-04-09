@@ -71,6 +71,18 @@ pub struct Config {
     #[arg(long, default_value_t = 0, env = "GRAFEO_BOLT_MAX_SESSIONS")]
     pub bolt_max_sessions: usize,
 
+    /// Directory for storing database backups.
+    #[arg(long, env = "GRAFEO_BACKUP_DIR")]
+    pub backup_dir: Option<String>,
+
+    /// Cron schedule for automatic backups (e.g. "0 2 * * *" for daily at 2am).
+    #[arg(long, env = "GRAFEO_BACKUP_SCHEDULE")]
+    pub backup_schedule: Option<String>,
+
+    /// Number of backups to retain per database (oldest are deleted).
+    #[arg(long, env = "GRAFEO_BACKUP_RETENTION")]
+    pub backup_retention: Option<usize>,
+
     /// Log level.
     #[arg(long, default_value = "info", env = "GRAFEO_LOG_LEVEL")]
     pub log_level: String,

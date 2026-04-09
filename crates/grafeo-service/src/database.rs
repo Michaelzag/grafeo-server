@@ -8,7 +8,9 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 
+use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use grafeo_engine::{AccessMode, Config, DurabilityMode, GrafeoDB};
 
@@ -69,10 +71,68 @@ impl Default for DatabaseMetadata {
     }
 }
 
+/// Database availability state.
+const STATE_AVAILABLE: u8 = 0;
+const STATE_RESTORING: u8 = 1;
+
 /// A single database instance with its metadata.
+///
+/// The `GrafeoDB` handle is behind an `ArcSwap` so that restore can hot-swap
+/// the handle without removing the entry from the registry. Callers use
+/// `entry.db()` to get a snapshot of the current handle.
 pub struct DatabaseEntry {
-    pub db: Arc<GrafeoDB>,
+    inner: ArcSwap<GrafeoDB>,
+    state: AtomicU8,
     pub metadata: DatabaseMetadata,
+}
+
+impl DatabaseEntry {
+    /// Creates a new entry in the `Available` state.
+    pub fn new(db: Arc<GrafeoDB>, metadata: DatabaseMetadata) -> Self {
+        Self {
+            inner: ArcSwap::from(db),
+            state: AtomicU8::new(STATE_AVAILABLE),
+            metadata,
+        }
+    }
+
+    /// Returns a snapshot of the current database handle.
+    ///
+    /// Lock-free on the read path. The returned `Arc` keeps the handle alive
+    /// even if a concurrent restore swaps in a new one.
+    pub fn db(&self) -> Arc<GrafeoDB> {
+        self.inner.load_full()
+    }
+
+    /// Atomically swaps the database handle. Used by restore.
+    pub fn swap_db(&self, new_db: Arc<GrafeoDB>) {
+        self.inner.store(new_db);
+    }
+
+    /// Returns `true` if the database is currently being restored.
+    pub fn is_restoring(&self) -> bool {
+        self.state.load(Ordering::Acquire) == STATE_RESTORING
+    }
+
+    /// Marks the database as restoring. Returns `false` if already restoring.
+    pub fn set_restoring(&self) -> bool {
+        self.state
+            .compare_exchange(STATE_AVAILABLE, STATE_RESTORING, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// Marks the database as available again.
+    pub fn set_available(&self) {
+        self.state.store(STATE_AVAILABLE, Ordering::Release);
+    }
+
+    /// Consumes the entry and returns the inner `Arc<GrafeoDB>` and metadata.
+    ///
+    /// Used by compact, which needs `Arc::get_mut` for `&mut GrafeoDB` access.
+    /// The entry must not be in the DashMap when calling this.
+    pub fn into_parts(self) -> (Arc<GrafeoDB>, DatabaseMetadata) {
+        (self.inner.into_inner(), self.metadata)
+    }
 }
 
 /// Thread-safe registry of named database instances.
@@ -150,10 +210,7 @@ impl DatabaseManager {
                                     };
                                     mgr.databases.insert(
                                         name,
-                                        Arc::new(DatabaseEntry {
-                                            db: Arc::new(db),
-                                            metadata,
-                                        }),
+                                        Arc::new(DatabaseEntry::new(Arc::new(db), metadata)),
                                     );
                                 }
                                 Err(e) => {
@@ -181,13 +238,13 @@ impl DatabaseManager {
                 };
                 mgr.databases.insert(
                     "default".to_string(),
-                    Arc::new(DatabaseEntry {
-                        db: Arc::new(db),
-                        metadata: DatabaseMetadata {
+                    Arc::new(DatabaseEntry::new(
+                        Arc::new(db),
+                        DatabaseMetadata {
                             storage_mode: "persistent".to_string(),
                             ..Default::default()
                         },
-                    }),
+                    )),
                 );
             }
         } else {
@@ -195,10 +252,10 @@ impl DatabaseManager {
             tracing::info!("Creating default in-memory database");
             mgr.databases.insert(
                 "default".to_string(),
-                Arc::new(DatabaseEntry {
-                    db: Arc::new(GrafeoDB::new_in_memory()),
-                    metadata: DatabaseMetadata::default(),
-                }),
+                Arc::new(DatabaseEntry::new(
+                    Arc::new(GrafeoDB::new_in_memory()),
+                    DatabaseMetadata::default(),
+                )),
             );
         }
 
@@ -213,13 +270,30 @@ impl DatabaseManager {
     pub fn set_cdc_enabled(&mut self, enabled: bool) {
         self.cdc_enabled = enabled;
         for entry in &self.databases {
-            entry.value().db.set_cdc_enabled(enabled);
+            entry.value().db().set_cdc_enabled(enabled);
         }
     }
 
     /// Returns a clone of the `Arc<DatabaseEntry>` for the given database name.
     pub fn get(&self, name: &str) -> Option<Arc<DatabaseEntry>> {
         self.databases.get(name).map(|e| Arc::clone(e.value()))
+    }
+
+    /// Returns a database entry, rejecting if it's currently being restored.
+    ///
+    /// Use this in request paths where a 503 is appropriate during restore.
+    pub fn get_available(&self, name: &str) -> Result<Arc<DatabaseEntry>, ServiceError> {
+        let entry = self
+            .get(name)
+            .ok_or_else(|| ServiceError::NotFound(format!("database '{name}' not found")))?;
+
+        if entry.is_restoring() {
+            return Err(ServiceError::Unavailable(format!(
+                "database '{name}' is currently being restored"
+            )));
+        }
+
+        Ok(entry)
     }
 
     /// Creates a new named database from a full request.
@@ -394,10 +468,7 @@ impl DatabaseManager {
 
         self.databases.insert(
             name.clone(),
-            Arc::new(DatabaseEntry {
-                db: Arc::new(db),
-                metadata,
-            }),
+            Arc::new(DatabaseEntry::new(Arc::new(db), metadata)),
         );
 
         Ok(())
@@ -431,7 +502,7 @@ impl DatabaseManager {
         let (_, entry) = removed.unwrap();
 
         // Close the engine
-        if let Err(e) = entry.db.close() {
+        if let Err(e) = entry.db().close() {
             tracing::warn!(name = %name, error = %e, "Error closing database");
         }
 
@@ -465,9 +536,9 @@ impl DatabaseManager {
                 let e = entry.value();
                 crate::types::DatabaseSummary {
                     name,
-                    node_count: e.db.node_count(),
-                    edge_count: e.db.edge_count(),
-                    persistent: e.db.path().is_some(),
+                    node_count: e.db().node_count(),
+                    edge_count: e.db().edge_count(),
+                    persistent: e.db().path().is_some(),
                     database_type: e.metadata.database_type.clone(),
                 }
             })
@@ -491,12 +562,18 @@ impl DatabaseManager {
 
         match Arc::try_unwrap(entry) {
             Ok(db_entry) => {
-                if Arc::strong_count(&db_entry.db) != 1 {
+                // load_full() bumps the strong count by 1, so the expected
+                // count when nobody else holds a reference is 2: one inside
+                // the ArcSwap and one from this load_full() call.
+                let db_arc = db_entry.db();
+                if Arc::strong_count(&db_arc) > 2 {
+                    drop(db_arc);
                     self.databases.insert(name.to_string(), Arc::new(db_entry));
                     return Err(ServiceError::Conflict(
                         "database is in use by active sessions, cannot compact".to_string(),
                     ));
                 }
+                drop(db_arc);
                 Ok(db_entry)
             }
             Err(still_shared) => {
@@ -528,7 +605,7 @@ impl DatabaseManager {
     pub fn total_allocated_memory(&self) -> usize {
         self.databases
             .iter()
-            .filter_map(|e| e.value().db.memory_limit())
+            .filter_map(|e| e.value().db().memory_limit())
             .sum()
     }
 
@@ -544,7 +621,7 @@ impl DatabaseManager {
             let mut seen_headers = std::collections::HashSet::new();
             for entry in &self.databases {
                 let name = entry.key();
-                let text = entry.value().db.metrics_prometheus();
+                let text = entry.value().db().metrics_prometheus();
                 if text.is_empty() {
                     continue;
                 }

@@ -8,6 +8,7 @@ use futures_util::{SinkExt, StreamExt};
 use reqwest::Client;
 use serde_json::{Value, json};
 use std::net::SocketAddr;
+use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite;
 
@@ -5117,4 +5118,246 @@ async fn bolt_route_returns_routing_table() {
     }
 
     session.close().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Backup & Restore
+// ---------------------------------------------------------------------------
+
+/// Boots a server with backup configured, returning (base_url, backup_tempdir).
+/// The TempDir must be kept alive for the duration of the test.
+async fn spawn_server_with_backup() -> (String, TempDir) {
+    let backup_dir = TempDir::new().unwrap();
+    let config = grafeo_service::ServiceConfig {
+        data_dir: None,
+        read_only: false,
+        session_ttl: 300,
+        query_timeout: 30,
+        rate_limit: 0,
+        rate_limit_window: 60,
+        #[cfg(feature = "auth")]
+        auth_token: None,
+        #[cfg(feature = "auth")]
+        auth_user: None,
+        #[cfg(feature = "auth")]
+        auth_password: None,
+        #[cfg(feature = "replication")]
+        replication_mode: grafeo_service::replication::ReplicationMode::Standalone,
+        backup_dir: Some(backup_dir.path().to_str().unwrap().to_string()),
+        backup_retention: None,
+        backup_schedule: None,
+    };
+    let service = grafeo_service::ServiceState::new(&config);
+    let state = grafeo_server::AppState::new(
+        service,
+        vec![],
+        grafeo_service::types::EnabledFeatures::default(),
+    );
+    let base = spawn_server_from_state(state).await;
+    (base, backup_dir)
+}
+
+#[tokio::test]
+async fn backup_requires_configuration() {
+    let base = spawn_server().await;
+    let client = Client::new();
+
+    let resp = client
+        .post(format!("{base}/admin/default/backup"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn backup_create_and_list() {
+    let (base, _dir) = spawn_server_with_backup().await;
+    let client = Client::new();
+
+    // Create a backup
+    let resp = client
+        .post(format!("{base}/admin/default/backup"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["database"], "default");
+    assert!(body["filename"].as_str().unwrap().ends_with(".grafeo"));
+    assert!(body["size_bytes"].as_u64().unwrap() > 0);
+
+    // List backups for this database
+    let resp = client
+        .get(format!("{base}/admin/default/backups"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let backups: Vec<Value> = resp.json().await.unwrap();
+    assert_eq!(backups.len(), 1);
+    assert_eq!(backups[0]["database"], "default");
+}
+
+#[tokio::test]
+async fn backup_list_all() {
+    let (base, _dir) = spawn_server_with_backup().await;
+    let client = Client::new();
+
+    client
+        .post(format!("{base}/admin/default/backup"))
+        .send()
+        .await
+        .unwrap();
+
+    let resp = client
+        .get(format!("{base}/admin/backups"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let backups: Vec<Value> = resp.json().await.unwrap();
+    assert_eq!(backups.len(), 1);
+}
+
+#[tokio::test]
+async fn backup_not_found_database() {
+    let (base, _dir) = spawn_server_with_backup().await;
+    let client = Client::new();
+
+    let resp = client
+        .post(format!("{base}/admin/nonexistent/backup"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn backup_delete() {
+    let (base, _dir) = spawn_server_with_backup().await;
+    let client = Client::new();
+
+    let resp = client
+        .post(format!("{base}/admin/default/backup"))
+        .send()
+        .await
+        .unwrap();
+    let body: Value = resp.json().await.unwrap();
+    let filename = body["filename"].as_str().unwrap();
+
+    let resp = client
+        .delete(format!("{base}/admin/backups/{filename}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let resp = client
+        .get(format!("{base}/admin/default/backups"))
+        .send()
+        .await
+        .unwrap();
+    let backups: Vec<Value> = resp.json().await.unwrap();
+    assert!(backups.is_empty());
+}
+
+#[tokio::test]
+async fn backup_delete_not_found() {
+    let (base, _dir) = spawn_server_with_backup().await;
+    let client = Client::new();
+
+    let resp = client
+        .delete(format!("{base}/admin/backups/nonexistent.grafeo"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn backup_download() {
+    let (base, _dir) = spawn_server_with_backup().await;
+    let client = Client::new();
+
+    let resp = client
+        .post(format!("{base}/admin/default/backup"))
+        .send()
+        .await
+        .unwrap();
+    let body: Value = resp.json().await.unwrap();
+    let filename = body["filename"].as_str().unwrap();
+    let size = body["size_bytes"].as_u64().unwrap();
+
+    let resp = client
+        .get(format!("{base}/admin/backups/download/{filename}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers()
+            .get("content-disposition")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        &format!("attachment; filename=\"{filename}\"")
+    );
+
+    let bytes = resp.bytes().await.unwrap();
+    assert_eq!(bytes.len() as u64, size);
+}
+
+#[tokio::test]
+async fn backup_download_not_found() {
+    let (base, _dir) = spawn_server_with_backup().await;
+    let client = Client::new();
+
+    let resp = client
+        .get(format!("{base}/admin/backups/download/nonexistent.grafeo"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn restore_requires_backup_config() {
+    let base = spawn_server().await;
+    let client = Client::new();
+
+    let resp = client
+        .post(format!("{base}/admin/default/restore"))
+        .json(&json!({ "backup": "something.grafeo" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn restore_in_memory_rejected() {
+    let (base, _dir) = spawn_server_with_backup().await;
+    let client = Client::new();
+
+    // Create a backup first so the file exists
+    let resp = client
+        .post(format!("{base}/admin/default/backup"))
+        .send()
+        .await
+        .unwrap();
+    let body: Value = resp.json().await.unwrap();
+    let filename = body["filename"].as_str().unwrap();
+
+    // Restore should fail because the default db is in-memory
+    let resp = client
+        .post(format!("{base}/admin/default/restore"))
+        .json(&json!({ "backup": filename }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
 }

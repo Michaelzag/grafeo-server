@@ -102,6 +102,11 @@ impl IntoResponse for ApiError {
                 "read_only",
                 Some("server is in read-only mode".to_string()),
             ),
+            ServiceError::Unavailable(msg) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "unavailable",
+                Some(msg.clone()),
+            ),
             ServiceError::Internal(msg) => {
                 tracing::error!(%msg, "internal server error");
                 (

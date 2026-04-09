@@ -28,7 +28,7 @@ impl SearchService {
             } else {
                 Some(req.filters)
             };
-            entry.db.vector_search(
+            entry.db().vector_search(
                 &req.label,
                 &req.property,
                 &req.query_vector,
@@ -124,7 +124,7 @@ impl SearchService {
             } else {
                 Some(req.query_vector)
             };
-            entry.db.hybrid_search(
+            entry.db().hybrid_search(
                 &req.label,
                 &req.text_property,
                 &req.vector_property,

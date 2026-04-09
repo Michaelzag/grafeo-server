@@ -1,0 +1,101 @@
+.panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-md);
+}
+
+.heading {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.closeButton {
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  color: var(--text-muted);
+  transition: all 0.1s;
+}
+
+.closeButton:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.empty {
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: var(--space-md) 0;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.table th {
+  text-align: left;
+  padding: var(--space-xs) var(--space-sm);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.table td {
+  padding: var(--space-sm);
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+.table tr:last-child td {
+  border-bottom: none;
+}
+
+.filename {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.rowActions {
+  display: flex;
+  gap: var(--space-sm);
+  justify-content: flex-end;
+}
+
+.link {
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  text-decoration: none;
+  transition: color 0.1s;
+}
+
+.link:hover {
+  color: var(--accent-hover);
+}
+
+.danger {
+  color: var(--error);
+}
+
+.danger:hover {
+  color: var(--error);
+  opacity: 0.8;
+}

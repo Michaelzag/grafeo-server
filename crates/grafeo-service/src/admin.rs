@@ -3,6 +3,8 @@
 //! Transport-agnostic. Called by both HTTP routes and GWP backend.
 
 use crate::database::DatabaseManager;
+#[cfg(feature = "compact-store")]
+use crate::database::DatabaseEntry;
 use crate::error::ServiceError;
 use crate::metrics::Metrics;
 use crate::types;
@@ -20,7 +22,7 @@ impl AdminService {
             .get(db_name)
             .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
 
-        let stats = tokio::task::spawn_blocking(move || entry.db.detailed_stats())
+        let stats = tokio::task::spawn_blocking(move || entry.db().detailed_stats())
             .await
             .map_err(|e| ServiceError::Internal(e.to_string()))?;
 
@@ -46,7 +48,7 @@ impl AdminService {
             .get(db_name)
             .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
 
-        let status = tokio::task::spawn_blocking(move || entry.db.wal_status())
+        let status = tokio::task::spawn_blocking(move || entry.db().wal_status())
             .await
             .map_err(|e| ServiceError::Internal(e.to_string()))?;
 
@@ -83,7 +85,7 @@ impl AdminService {
         }
         #[cfg(not(feature = "async-storage"))]
         {
-            tokio::task::spawn_blocking(move || entry.db.wal_checkpoint())
+            tokio::task::spawn_blocking(move || entry.db().wal_checkpoint())
                 .await
                 .map_err(|e| ServiceError::Internal(e.to_string()))?
                 .map_err(|e| ServiceError::Internal(e.to_string()))
@@ -99,7 +101,7 @@ impl AdminService {
             .get(db_name)
             .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
 
-        let result = tokio::task::spawn_blocking(move || entry.db.validate())
+        let result = tokio::task::spawn_blocking(move || entry.db().validate())
             .await
             .map_err(|e| ServiceError::Internal(e.to_string()))?;
 
@@ -142,7 +144,7 @@ impl AdminService {
 
         tokio::task::spawn_blocking(move || match index {
             types::IndexDef::Property { property } => {
-                entry.db.create_property_index(&property);
+                entry.db().create_property_index(&property);
                 Ok(())
             }
             #[cfg(feature = "vector-index")]
@@ -191,7 +193,7 @@ impl AdminService {
             .get(db_name)
             .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
 
-        let stats = tokio::task::spawn_blocking(move || entry.db.query_cache().stats())
+        let stats = tokio::task::spawn_blocking(move || entry.db().query_cache().stats())
             .await
             .map_err(|e| ServiceError::Internal(e.to_string()))?;
 
@@ -231,7 +233,7 @@ impl AdminService {
             .get(db_name)
             .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
 
-        tokio::task::spawn_blocking(move || entry.db.clear_plan_cache())
+        tokio::task::spawn_blocking(move || entry.db().clear_plan_cache())
             .await
             .map_err(|e| ServiceError::Internal(e.to_string()))
     }
@@ -245,7 +247,7 @@ impl AdminService {
             .get(db_name)
             .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
 
-        let usage = tokio::task::spawn_blocking(move || entry.db.memory_usage())
+        let usage = tokio::task::spawn_blocking(move || entry.db().memory_usage())
             .await
             .map_err(|e| ServiceError::Internal(e.to_string()))?;
 
@@ -261,7 +263,7 @@ impl AdminService {
             .get(db_name)
             .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
 
-        tokio::task::spawn_blocking(move || entry.db.list_graphs())
+        tokio::task::spawn_blocking(move || entry.db().list_graphs())
             .await
             .map_err(|e| ServiceError::Internal(e.to_string()))
     }
@@ -282,7 +284,7 @@ impl AdminService {
             .get(db_name)
             .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
 
-        tokio::task::spawn_blocking(move || entry.db.create_graph(&graph_name))
+        tokio::task::spawn_blocking(move || entry.db().create_graph(&graph_name))
             .await
             .map_err(|e| ServiceError::Internal(e.to_string()))?
             .map_err(|e| ServiceError::Internal(e.to_string()))
@@ -304,7 +306,7 @@ impl AdminService {
             .get(db_name)
             .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
 
-        tokio::task::spawn_blocking(move || entry.db.drop_graph(&graph_name))
+        tokio::task::spawn_blocking(move || entry.db().drop_graph(&graph_name))
             .await
             .map_err(|e| ServiceError::Internal(e.to_string()))
     }
@@ -324,16 +326,16 @@ impl AdminService {
             .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
 
         tokio::task::spawn_blocking(move || match index {
-            types::IndexDef::Property { property } => entry.db.drop_property_index(&property),
+            types::IndexDef::Property { property } => entry.db().drop_property_index(&property),
             #[cfg(feature = "vector-index")]
             types::IndexDef::Vector {
                 label, property, ..
-            } => entry.db.drop_vector_index(&label, &property),
+            } => entry.db().drop_vector_index(&label, &property),
             #[cfg(not(feature = "vector-index"))]
             types::IndexDef::Vector { .. } => false,
             #[cfg(feature = "text-index")]
             types::IndexDef::Text { label, property } => {
-                entry.db.drop_text_index(&label, &property)
+                entry.db().drop_text_index(&label, &property)
             }
             #[cfg(not(feature = "text-index"))]
             types::IndexDef::Text { .. } => false,
@@ -361,15 +363,17 @@ impl AdminService {
             use std::panic::{AssertUnwindSafe, catch_unwind};
             use std::sync::Arc;
 
-            let mut db_entry = databases.take_exclusive(db_name)?;
+            let db_entry = databases.take_exclusive(db_name)?;
             let name = db_name.to_owned();
 
             let result = tokio::task::spawn_blocking(move || {
-                let db = match Arc::get_mut(&mut db_entry.db) {
+                let (mut db_arc, mut metadata) = db_entry.into_parts();
+                let db = match Arc::get_mut(&mut db_arc) {
                     Some(db) => db,
                     None => {
+                        let entry = DatabaseEntry::new(db_arc, metadata);
                         return Err((
-                            db_entry,
+                            entry,
                             ServiceError::Conflict(
                                 "inner Arc<GrafeoDB> still shared after take_exclusive".to_string(),
                             ),
@@ -379,15 +383,15 @@ impl AdminService {
 
                 match catch_unwind(AssertUnwindSafe(|| db.compact())) {
                     Ok(Ok(())) => {
-                        db_entry.metadata.storage_mode = "compact".to_string();
-                        Ok(db_entry)
+                        metadata.storage_mode = "compact".to_string();
+                        Ok(DatabaseEntry::new(db_arc, metadata))
                     }
                     Ok(Err(e)) => Err((
-                        db_entry,
+                        DatabaseEntry::new(db_arc, metadata),
                         ServiceError::Internal(format!("compaction failed: {e}")),
                     )),
                     Err(_panic) => Err((
-                        db_entry,
+                        DatabaseEntry::new(db_arc, metadata),
                         ServiceError::Internal("compaction panicked".to_string()),
                     )),
                 }
@@ -437,7 +441,7 @@ impl AdminService {
             .ok_or_else(|| ServiceError::NotFound(format!("database '{db_name}' not found")))?;
 
         let (nodes_created, edges_created) = tokio::task::spawn_blocking(move || {
-            entry.db.import_tsv_str(&data, &edge_type, directed)
+            entry.db().import_tsv_str(&data, &edge_type, directed)
         })
         .await
         .map_err(|e| ServiceError::Internal(e.to_string()))?

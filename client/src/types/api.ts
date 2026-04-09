@@ -99,6 +99,33 @@ export interface DatabaseSchemaResponse {
   property_keys: string[];
 }
 
+// Admin types
+
+export interface WalStatusInfo {
+  enabled: boolean;
+  path?: string;
+  size_bytes: number;
+  record_count: number;
+  last_checkpoint?: number;
+  current_epoch: number;
+}
+
+export interface ValidationInfo {
+  valid: boolean;
+  errors: { code: string; message: string; context?: string }[];
+  warnings: { code: string; message: string; context?: string }[];
+}
+
+export interface BackupEntry {
+  filename: string;
+  database: string;
+  size_bytes: number;
+  created_at: string;
+  node_count: number;
+  edge_count: number;
+  epoch: number;
+}
+
 export interface ResourceDefaults {
   memory_limit_bytes: number;
   storage_mode: string;
