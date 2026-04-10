@@ -262,8 +262,7 @@ impl SyncService {
         since: u64,
         limit: usize,
     ) -> Result<ChangesResponse, ServiceError> {
-        let entry = databases
-            .get_available(db_name)?;
+        let entry = databases.get_available(db_name)?;
 
         if !entry.db().is_cdc_enabled() {
             return Err(ServiceError::BadRequest(
@@ -276,7 +275,7 @@ impl SyncService {
         let until_id = grafeo_common::types::EpochId(server_epoch);
 
         let raw = entry
-            .db
+            .db()
             .changes_between(since_id, until_id)
             .map_err(|e| ServiceError::Internal(e.to_string()))?;
 
@@ -312,10 +311,10 @@ impl SyncService {
         db_name: &str,
         request: SyncRequest,
     ) -> Result<SyncResponse, ServiceError> {
-        let entry = databases
-            .get_available(db_name)?;
+        let entry = databases.get_available(db_name)?;
 
-        let db = entry.db();
+        let db_handle = entry.db();
+        let db = &*db_handle;
         let mut applied = 0usize;
         let mut skipped = 0usize;
         let mut conflicts: Vec<ConflictRecord> = Vec::new();
@@ -899,7 +898,7 @@ mod tests {
         let node = entry.db().create_node(&["Person"]);
         // Write a property — this records a CDC event with a recent timestamp.
         entry
-            .db
+            .db()
             .set_node_property(node, "name", grafeo_common::types::Value::from("Gus"));
 
         // Client sends an update with timestamp 0 (very old).
@@ -1049,11 +1048,11 @@ mod tests {
         let primary_db = primary.get("default").unwrap();
         let alix = primary_db.db().create_node(&["Person"]);
         primary_db
-            .db
+            .db()
             .set_node_property(alix, "name", grafeo_common::types::Value::from("Alix"));
         let gus = primary_db.db().create_node(&["Person"]);
         primary_db
-            .db
+            .db()
             .set_node_property(gus, "name", grafeo_common::types::Value::from("Gus"));
         let _edge = primary_db.db().create_edge(alix, gus, "KNOWS");
 

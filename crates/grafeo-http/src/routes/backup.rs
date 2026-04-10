@@ -45,7 +45,7 @@ pub async fn create_backup(
 
     // Enforce retention if configured
     if let Some(keep) = state.backup_retention() {
-        let _ = BackupService::enforce_retention(&db, &backup_dir, keep).await;
+        let _ = BackupService::enforce_retention(&db, &backup_dir, keep);
     }
 
     Ok(Json(entry))
@@ -77,7 +77,7 @@ pub async fn list_backups(
         })?
         .to_path_buf();
 
-    let entries = BackupService::list_backups(Some(&db), &backup_dir).await?;
+    let entries = BackupService::list_backups(Some(&db), &backup_dir)?;
     Ok(Json(entries))
 }
 
@@ -103,7 +103,7 @@ pub async fn list_all_backups(
         })?
         .to_path_buf();
 
-    let entries = BackupService::list_backups(None, &backup_dir).await?;
+    let entries = BackupService::list_backups(None, &backup_dir)?;
     Ok(Json(entries))
 }
 
@@ -190,7 +190,7 @@ pub async fn delete_backup(
         .into());
     }
 
-    BackupService::delete_backup(&filename, &backup_dir).await?;
+    BackupService::delete_backup(&filename, &backup_dir)?;
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
 
@@ -254,10 +254,7 @@ pub async fn download_backup(
         .collect();
 
     let headers = [
-        (
-            header::CONTENT_TYPE,
-            "application/octet-stream".to_string(),
-        ),
+        (header::CONTENT_TYPE, "application/octet-stream".to_string()),
         (
             header::CONTENT_DISPOSITION,
             format!("attachment; filename=\"{safe_filename}\""),

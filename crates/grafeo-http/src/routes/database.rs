@@ -112,9 +112,7 @@ pub async fn database_info(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<DatabaseInfoResponse>, ApiError> {
-    let entry = state
-        .databases()
-        .get_available(&name)?;
+    let entry = state.databases().get_available(&name)?;
 
     let db = entry.db();
     let info = db.info();
@@ -153,9 +151,7 @@ pub async fn database_stats(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<DatabaseStatsResponse>, ApiError> {
-    let entry = state
-        .databases()
-        .get_available(&name)?;
+    let entry = state.databases().get_available(&name)?;
 
     let stats = entry.db().detailed_stats();
     Ok(Json(DatabaseStatsResponse {
@@ -190,9 +186,7 @@ pub async fn database_schema(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<DatabaseSchemaResponse>, ApiError> {
-    let entry = state
-        .databases()
-        .get_available(&name)?;
+    let entry = state.databases().get_available(&name)?;
 
     let schema = entry.db().schema();
     match schema {

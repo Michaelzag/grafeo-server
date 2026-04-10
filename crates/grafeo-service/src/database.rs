@@ -89,6 +89,7 @@ pub struct DatabaseEntry {
 impl std::fmt::Debug for DatabaseEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DatabaseEntry")
+            .field("inner", &"ArcSwap<GrafeoDB>")
             .field("state", &self.state.load(Ordering::Relaxed))
             .field("metadata", &self.metadata.database_type)
             .finish()
@@ -126,7 +127,12 @@ impl DatabaseEntry {
     /// Marks the database as restoring. Returns `false` if already restoring.
     pub fn set_restoring(&self) -> bool {
         self.state
-            .compare_exchange(STATE_AVAILABLE, STATE_RESTORING, Ordering::AcqRel, Ordering::Acquire)
+            .compare_exchange(
+                STATE_AVAILABLE,
+                STATE_RESTORING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
             .is_ok()
     }
 

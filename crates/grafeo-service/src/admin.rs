@@ -2,9 +2,9 @@
 //!
 //! Transport-agnostic. Called by both HTTP routes and GWP backend.
 
-use crate::database::DatabaseManager;
 #[cfg(feature = "compact-store")]
 use crate::database::DatabaseEntry;
+use crate::database::DatabaseManager;
 use crate::error::ServiceError;
 use crate::metrics::Metrics;
 use crate::types;
@@ -18,8 +18,7 @@ impl AdminService {
         databases: &DatabaseManager,
         db_name: &str,
     ) -> Result<types::DatabaseStats, ServiceError> {
-        let entry = databases
-            .get_available(db_name)?;
+        let entry = databases.get_available(db_name)?;
 
         let stats = tokio::task::spawn_blocking(move || entry.db().detailed_stats())
             .await
@@ -43,8 +42,7 @@ impl AdminService {
         databases: &DatabaseManager,
         db_name: &str,
     ) -> Result<types::WalStatusInfo, ServiceError> {
-        let entry = databases
-            .get_available(db_name)?;
+        let entry = databases.get_available(db_name)?;
 
         let status = tokio::task::spawn_blocking(move || entry.db().wal_status())
             .await
@@ -69,8 +67,7 @@ impl AdminService {
             return Err(ServiceError::ReadOnly);
         }
 
-        let entry = databases
-            .get_available(db_name)?;
+        let entry = databases.get_available(db_name)?;
 
         #[cfg(feature = "async-storage")]
         {
@@ -94,8 +91,7 @@ impl AdminService {
         databases: &DatabaseManager,
         db_name: &str,
     ) -> Result<types::ValidationInfo, ServiceError> {
-        let entry = databases
-            .get_available(db_name)?;
+        let entry = databases.get_available(db_name)?;
 
         let result = tokio::task::spawn_blocking(move || entry.db().validate())
             .await
@@ -134,8 +130,7 @@ impl AdminService {
             return Err(ServiceError::ReadOnly);
         }
 
-        let entry = databases
-            .get_available(db_name)?;
+        let entry = databases.get_available(db_name)?;
 
         tokio::task::spawn_blocking(move || match index {
             types::IndexDef::Property { property } => {
@@ -184,8 +179,7 @@ impl AdminService {
         databases: &DatabaseManager,
         db_name: &str,
     ) -> Result<types::CacheStatsInfo, ServiceError> {
-        let entry = databases
-            .get_available(db_name)?;
+        let entry = databases.get_available(db_name)?;
 
         let stats = tokio::task::spawn_blocking(move || entry.db().query_cache().stats())
             .await
@@ -223,8 +217,7 @@ impl AdminService {
         databases: &DatabaseManager,
         db_name: &str,
     ) -> Result<(), ServiceError> {
-        let entry = databases
-            .get_available(db_name)?;
+        let entry = databases.get_available(db_name)?;
 
         tokio::task::spawn_blocking(move || entry.db().clear_plan_cache())
             .await
@@ -236,8 +229,7 @@ impl AdminService {
         databases: &DatabaseManager,
         db_name: &str,
     ) -> Result<serde_json::Value, ServiceError> {
-        let entry = databases
-            .get_available(db_name)?;
+        let entry = databases.get_available(db_name)?;
 
         let usage = tokio::task::spawn_blocking(move || entry.db().memory_usage())
             .await
@@ -251,8 +243,7 @@ impl AdminService {
         databases: &DatabaseManager,
         db_name: &str,
     ) -> Result<Vec<String>, ServiceError> {
-        let entry = databases
-            .get_available(db_name)?;
+        let entry = databases.get_available(db_name)?;
 
         tokio::task::spawn_blocking(move || entry.db().list_graphs())
             .await
@@ -271,8 +262,7 @@ impl AdminService {
             return Err(ServiceError::ReadOnly);
         }
 
-        let entry = databases
-            .get_available(db_name)?;
+        let entry = databases.get_available(db_name)?;
 
         tokio::task::spawn_blocking(move || entry.db().create_graph(&graph_name))
             .await
@@ -292,8 +282,7 @@ impl AdminService {
             return Err(ServiceError::ReadOnly);
         }
 
-        let entry = databases
-            .get_available(db_name)?;
+        let entry = databases.get_available(db_name)?;
 
         tokio::task::spawn_blocking(move || entry.db().drop_graph(&graph_name))
             .await
@@ -310,8 +299,7 @@ impl AdminService {
             return Err(ServiceError::ReadOnly);
         }
 
-        let entry = databases
-            .get_available(db_name)?;
+        let entry = databases.get_available(db_name)?;
 
         tokio::task::spawn_blocking(move || match index {
             types::IndexDef::Property { property } => entry.db().drop_property_index(&property),
@@ -424,8 +412,7 @@ impl AdminService {
             return Err(ServiceError::ReadOnly);
         }
 
-        let entry = databases
-            .get_available(db_name)?;
+        let entry = databases.get_available(db_name)?;
 
         let (nodes_created, edges_created) = tokio::task::spawn_blocking(move || {
             entry.db().import_tsv_str(&data, &edge_type, directed)
@@ -562,13 +549,12 @@ impl AdminService {
             return Err(ServiceError::ReadOnly);
         }
 
-        let entry = databases
-            .get_available(db_name)?;
+        let entry = databases.get_available(db_name)?;
 
         #[cfg(all(feature = "async-storage", feature = "grafeo-file"))]
         {
             entry
-                .db
+                .db()
                 .async_write_snapshot()
                 .await
                 .map_err(|e| ServiceError::Internal(e.to_string()))

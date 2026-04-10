@@ -225,20 +225,11 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/admin/{db}/compact", post(routes::admin::admin_compact))
         // Backup & Restore
-        .route(
-            "/admin/{db}/backup",
-            post(routes::backup::create_backup),
-        )
-        .route(
-            "/admin/{db}/backups",
-            get(routes::backup::list_backups),
-        )
+        .route("/admin/{db}/backup", post(routes::backup::create_backup))
+        .route("/admin/{db}/backups", get(routes::backup::list_backups))
         .route("/admin/{db}/restore", post(routes::backup::restore_backup))
         .route("/backups", get(routes::backup::list_all_backups))
-        .route(
-            "/backups/{filename}",
-            delete(routes::backup::delete_backup),
-        )
+        .route("/backups/{filename}", delete(routes::backup::delete_backup))
         .route(
             "/backups/download/{filename}",
             get(routes::backup::download_backup),

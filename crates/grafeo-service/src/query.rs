@@ -38,8 +38,7 @@ impl QueryService {
         timeout: Option<Duration>,
         read_only: bool,
     ) -> Result<QueryResult, ServiceError> {
-        let entry = databases
-            .get_available(db_name)?;
+        let entry = databases.get_available(db_name)?;
 
         let lang = determine_language(language);
         let stmt = statement.to_owned();
@@ -113,8 +112,7 @@ impl QueryService {
         db_name: &str,
         read_only: bool,
     ) -> Result<String, ServiceError> {
-        let entry = databases
-            .get_available(db_name)?;
+        let entry = databases.get_available(db_name)?;
 
         let db_name = db_name.to_owned();
         let session_id = tokio::task::spawn_blocking(move || {
@@ -198,8 +196,7 @@ impl QueryService {
             return Ok(vec![]);
         }
 
-        let entry = databases
-            .get_available(db_name)?;
+        let entry = databases.get_available(db_name)?;
 
         // Collect language info for post-execution metrics recording.
         // Metrics use atomics (not Clone), so we record after the blocking task.

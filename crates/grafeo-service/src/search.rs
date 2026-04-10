@@ -18,8 +18,7 @@ impl SearchService {
         db_name: &str,
         req: types::VectorSearchReq,
     ) -> Result<Vec<types::SearchHit>, ServiceError> {
-        let entry = databases
-            .get_available(db_name)?;
+        let entry = databases.get_available(db_name)?;
 
         let results = tokio::task::spawn_blocking(move || {
             let filters = if req.filters.is_empty() {
@@ -70,8 +69,7 @@ impl SearchService {
         db_name: &str,
         req: types::TextSearchReq,
     ) -> Result<Vec<types::SearchHit>, ServiceError> {
-        let entry = databases
-            .get_available(db_name)?;
+        let entry = databases.get_available(db_name)?;
 
         let results = tokio::task::spawn_blocking(move || {
             entry
@@ -112,8 +110,7 @@ impl SearchService {
         db_name: &str,
         req: types::HybridSearchReq,
     ) -> Result<Vec<types::SearchHit>, ServiceError> {
-        let entry = databases
-            .get_available(db_name)?;
+        let entry = databases.get_available(db_name)?;
 
         let results = tokio::task::spawn_blocking(move || {
             let query_vec = if req.query_vector.is_empty() {
