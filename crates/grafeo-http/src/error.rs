@@ -101,9 +101,7 @@ impl IntoResponse for ApiError {
             ServiceError::TooManyRequests => {
                 (StatusCode::TOO_MANY_REQUESTS, "too_many_requests", None)
             }
-            ServiceError::Forbidden(msg) => {
-                (StatusCode::FORBIDDEN, "forbidden", Some(msg.clone()))
-            }
+            ServiceError::Forbidden(msg) => (StatusCode::FORBIDDEN, "forbidden", Some(msg.clone())),
             ServiceError::ReadOnly => (
                 StatusCode::FORBIDDEN,
                 "read_only",

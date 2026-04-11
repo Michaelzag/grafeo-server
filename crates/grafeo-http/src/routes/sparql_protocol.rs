@@ -77,6 +77,7 @@ pub async fn sparql_get(
         None,
         timeout,
         state.service().is_query_read_only(),
+        None,
     )
     .await?;
 
@@ -143,6 +144,7 @@ pub async fn sparql_post(
                 params,
                 timeout,
                 state.service().is_query_read_only(),
+                None,
             )
             .await?;
 
@@ -168,6 +170,7 @@ pub async fn sparql_post(
         None,
         timeout,
         state.service().is_query_read_only(),
+        None,
     )
     .await?;
 

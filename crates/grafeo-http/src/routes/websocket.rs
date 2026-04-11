@@ -247,6 +247,7 @@ async fn process_query(state: &AppState, id: Option<String>, req: QueryRequest) 
         params,
         timeout,
         state.service().is_query_read_only(),
+        None,
     )
     .await;
 

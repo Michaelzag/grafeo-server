@@ -4392,6 +4392,8 @@ fn sync_state() -> grafeo_server::AppState {
         auth_user: None,
         #[cfg(feature = "auth")]
         auth_password: None,
+        #[cfg(feature = "auth")]
+        token_store_path: None,
         #[cfg(feature = "replication")]
         replication_mode: grafeo_service::replication::ReplicationMode::Primary,
         backup_dir: None,
@@ -5173,6 +5175,8 @@ async fn spawn_server_with_backup() -> (String, TempDir) {
         auth_user: None,
         #[cfg(feature = "auth")]
         auth_password: None,
+        #[cfg(feature = "auth")]
+        token_store_path: None,
         #[cfg(feature = "replication")]
         replication_mode: grafeo_service::replication::ReplicationMode::Standalone,
         backup_dir: Some(backup_dir.path().to_str().unwrap().to_string()),
@@ -5407,6 +5411,8 @@ async fn spawn_server_persistent_backup() -> (String, TempDir, TempDir) {
         auth_user: None,
         #[cfg(feature = "auth")]
         auth_password: None,
+        #[cfg(feature = "auth")]
+        token_store_path: None,
         #[cfg(feature = "replication")]
         replication_mode: grafeo_service::replication::ReplicationMode::Standalone,
         backup_dir: Some(backup_dir.path().to_str().unwrap().to_string()),
@@ -5439,6 +5445,8 @@ async fn spawn_server_persistent_backup_with_retention(keep: usize) -> (String, 
         auth_user: None,
         #[cfg(feature = "auth")]
         auth_password: None,
+        #[cfg(feature = "auth")]
+        token_store_path: None,
         #[cfg(feature = "replication")]
         replication_mode: grafeo_service::replication::ReplicationMode::Standalone,
         backup_dir: Some(backup_dir.path().to_str().unwrap().to_string()),

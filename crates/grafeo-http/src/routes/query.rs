@@ -37,6 +37,7 @@ async fn execute_query(
         params,
         timeout,
         state.service().is_query_read_only(),
+        None,
     )
     .await?;
 

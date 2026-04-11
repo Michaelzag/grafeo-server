@@ -63,6 +63,7 @@ pub async fn batch_query(
         batch_queries,
         timeout,
         state.service().is_query_read_only(),
+        None,
     )
     .await?;
 

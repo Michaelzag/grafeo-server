@@ -51,6 +51,7 @@ pub async fn tx_begin(
         state.sessions(),
         db_name,
         state.service().is_query_read_only(),
+        None,
     )
     .await?;
 

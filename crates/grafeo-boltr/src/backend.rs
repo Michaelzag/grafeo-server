@@ -68,7 +68,7 @@ impl BoltBackend for GrafeoBackend {
         let engine_session = tokio::task::spawn_blocking(move || {
             let db = entry.db();
             if ro {
-                db.session_read_only()
+                db.session_with_role(grafeo_engine::auth::Role::ReadOnly)
             } else {
                 db.session()
             }
@@ -111,7 +111,7 @@ impl BoltBackend for GrafeoBackend {
                 let engine_session = tokio::task::spawn_blocking(move || {
                     let db = entry.db();
                     if ro {
-                        db.session_read_only()
+                        db.session_with_role(grafeo_engine::auth::Role::ReadOnly)
                     } else {
                         db.session()
                     }
@@ -139,7 +139,7 @@ impl BoltBackend for GrafeoBackend {
         let engine_session = tokio::task::spawn_blocking(move || {
             let db = entry.db();
             if ro {
-                db.session_read_only()
+                db.session_with_role(grafeo_engine::auth::Role::ReadOnly)
             } else {
                 db.session()
             }

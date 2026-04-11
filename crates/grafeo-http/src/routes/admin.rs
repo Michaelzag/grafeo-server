@@ -21,7 +21,9 @@ use grafeo_service::types;
     tag = "Admin"
 )]
 pub async fn admin_stats(
-    State(state): State<AppState>, auth: AuthContext, Path(db): Path<String>,
+    State(state): State<AppState>,
+    auth: AuthContext,
+    Path(db): Path<String>,
 ) -> Result<Json<types::DatabaseStats>, ApiError> {
     auth.check_admin()?;
     let stats = AdminService::database_stats(state.databases(), &db).await?;
@@ -39,7 +41,9 @@ pub async fn admin_stats(
     tag = "Admin"
 )]
 pub async fn admin_wal_status(
-    State(state): State<AppState>, auth: AuthContext, Path(db): Path<String>,
+    State(state): State<AppState>,
+    auth: AuthContext,
+    Path(db): Path<String>,
 ) -> Result<Json<types::WalStatusInfo>, ApiError> {
     auth.check_admin()?;
     let status = AdminService::wal_status(state.databases(), &db).await?;
@@ -57,7 +61,9 @@ pub async fn admin_wal_status(
     tag = "Admin"
 )]
 pub async fn admin_wal_checkpoint(
-    State(state): State<AppState>, auth: AuthContext, Path(db): Path<String>,
+    State(state): State<AppState>,
+    auth: AuthContext,
+    Path(db): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     auth.check_admin()?;
     AdminService::wal_checkpoint(state.databases(), &db).await?;
@@ -75,7 +81,9 @@ pub async fn admin_wal_checkpoint(
     tag = "Admin"
 )]
 pub async fn admin_validate(
-    State(state): State<AppState>, auth: AuthContext, Path(db): Path<String>,
+    State(state): State<AppState>,
+    auth: AuthContext,
+    Path(db): Path<String>,
 ) -> Result<Json<types::ValidationInfo>, ApiError> {
     auth.check_admin()?;
     let result = AdminService::validate(state.databases(), &db).await?;
@@ -95,7 +103,9 @@ pub async fn admin_validate(
     tag = "Admin"
 )]
 pub async fn admin_create_index(
-    State(state): State<AppState>, auth: AuthContext, Path(db): Path<String>,
+    State(state): State<AppState>,
+    auth: AuthContext,
+    Path(db): Path<String>,
     Json(index): Json<types::IndexDef>,
 ) -> Result<impl IntoResponse, ApiError> {
     auth.check_admin()?;
@@ -114,7 +124,9 @@ pub async fn admin_create_index(
     tag = "Admin"
 )]
 pub async fn admin_cache_stats(
-    State(state): State<AppState>, auth: AuthContext, Path(db): Path<String>,
+    State(state): State<AppState>,
+    auth: AuthContext,
+    Path(db): Path<String>,
 ) -> Result<Json<types::CacheStatsInfo>, ApiError> {
     auth.check_admin()?;
     let stats = AdminService::cache_stats(state.databases(), &db).await?;
@@ -132,7 +144,9 @@ pub async fn admin_cache_stats(
     tag = "Admin"
 )]
 pub async fn admin_clear_cache(
-    State(state): State<AppState>, auth: AuthContext, Path(db): Path<String>,
+    State(state): State<AppState>,
+    auth: AuthContext,
+    Path(db): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     auth.check_admin()?;
     AdminService::clear_cache(state.databases(), &db).await?;
@@ -150,7 +164,9 @@ pub async fn admin_clear_cache(
     tag = "Admin"
 )]
 pub async fn admin_memory_usage(
-    State(state): State<AppState>, auth: AuthContext, Path(db): Path<String>,
+    State(state): State<AppState>,
+    auth: AuthContext,
+    Path(db): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     auth.check_admin()?;
     let usage = AdminService::memory_usage(state.databases(), &db).await?;
@@ -169,7 +185,9 @@ pub async fn admin_memory_usage(
     tag = "Admin"
 )]
 pub async fn admin_drop_index(
-    State(state): State<AppState>, auth: AuthContext, Path(db): Path<String>,
+    State(state): State<AppState>,
+    auth: AuthContext,
+    Path(db): Path<String>,
     Json(index): Json<types::IndexDef>,
 ) -> Result<impl IntoResponse, ApiError> {
     auth.check_admin()?;
@@ -191,7 +209,9 @@ pub async fn admin_drop_index(
     tag = "Admin"
 )]
 pub async fn admin_compact(
-    State(state): State<AppState>, auth: AuthContext, Path(db): Path<String>,
+    State(state): State<AppState>,
+    auth: AuthContext,
+    Path(db): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     auth.check_admin()?;
     AdminService::compact(state.databases(), &db).await?;
@@ -210,7 +230,9 @@ pub async fn admin_compact(
     tag = "Admin"
 )]
 pub async fn admin_write_snapshot(
-    State(state): State<AppState>, auth: AuthContext, Path(db): Path<String>,
+    State(state): State<AppState>,
+    auth: AuthContext,
+    Path(db): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     auth.check_admin()?;
     AdminService::write_snapshot(state.databases(), &db).await?;

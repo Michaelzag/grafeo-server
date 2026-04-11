@@ -1,10 +1,8 @@
 //! Token CRUD operations — create, list, revoke, get.
 
-#![cfg(feature = "auth")]
-
 use sha2::{Digest, Sha256};
 
-use crate::auth::{TokenRecord, TokenScope};
+use crate::auth::{TokenRecord, TokenScope, role_to_str};
 use crate::error::ServiceError;
 use crate::token_store::TokenStore;
 use crate::types;
@@ -20,6 +18,7 @@ impl TokenService {
         name: String,
         scope: types::TokenScopeRequest,
     ) -> Result<(TokenRecord, String), ServiceError> {
+        let role = scope.to_role()?;
         let id = uuid::Uuid::new_v4().to_string();
         let plaintext = generate_token();
         let token_hash = hash_token(&plaintext);
@@ -29,7 +28,7 @@ impl TokenService {
             name,
             token_hash,
             scope: TokenScope {
-                role: scope.role,
+                role,
                 databases: scope.databases,
             },
             created_at: chrono::Utc::now().to_rfc3339(),
@@ -53,7 +52,7 @@ impl TokenService {
                 id: r.id,
                 name: r.name,
                 scope: types::TokenScopeRequest {
-                    role: r.scope.role,
+                    role: role_to_str(r.scope.role).to_string(),
                     databases: r.scope.databases,
                 },
                 created_at: r.created_at,
@@ -63,10 +62,7 @@ impl TokenService {
     }
 
     /// Get a single token by ID.
-    pub fn get_token(
-        store: &TokenStore,
-        id: &str,
-    ) -> Result<types::TokenResponse, ServiceError> {
+    pub fn get_token(store: &TokenStore, id: &str) -> Result<types::TokenResponse, ServiceError> {
         let record = store
             .get(id)
             .ok_or_else(|| ServiceError::NotFound(format!("token '{id}' not found")))?;
@@ -75,7 +71,7 @@ impl TokenService {
             id: record.id,
             name: record.name,
             scope: types::TokenScopeRequest {
-                role: record.scope.role,
+                role: role_to_str(record.scope.role).to_string(),
                 databases: record.scope.databases,
             },
             created_at: record.created_at,
@@ -132,12 +128,8 @@ mod tests {
     #[test]
     fn create_token_returns_plaintext_and_record() {
         let store = make_store();
-        let (record, plaintext) = TokenService::create_token(
-            &store,
-            "test".to_string(),
-            default_scope(),
-        )
-        .unwrap();
+        let (record, plaintext) =
+            TokenService::create_token(&store, "test".to_string(), default_scope()).unwrap();
         assert!(!plaintext.is_empty());
         assert_ne!(plaintext, record.token_hash);
         assert_eq!(record.name, "test");
@@ -146,12 +138,8 @@ mod tests {
     #[test]
     fn create_token_hash_matches_sha256() {
         let store = make_store();
-        let (record, plaintext) = TokenService::create_token(
-            &store,
-            "test".to_string(),
-            default_scope(),
-        )
-        .unwrap();
+        let (record, plaintext) =
+            TokenService::create_token(&store, "test".to_string(), default_scope()).unwrap();
         assert_eq!(hash_token(&plaintext), record.token_hash);
     }
 
@@ -174,12 +162,8 @@ mod tests {
     #[test]
     fn create_token_persists_to_store() {
         let store = make_store();
-        let (record, plaintext) = TokenService::create_token(
-            &store,
-            "test".into(),
-            default_scope(),
-        )
-        .unwrap();
+        let (record, plaintext) =
+            TokenService::create_token(&store, "test".into(), default_scope()).unwrap();
         let found = store.find_by_hash(&hash_token(&plaintext));
         assert!(found.is_some());
         assert_eq!(found.unwrap().id, record.id);
@@ -239,7 +223,7 @@ mod tests {
             databases: vec!["db1".to_string(), "db2".to_string()],
         };
         let (record, _) = TokenService::create_token(&store, "scoped".into(), scope).unwrap();
-        assert_eq!(record.scope.role, "read-only");
+        assert_eq!(record.scope.role, grafeo_engine::auth::Role::ReadOnly);
         assert_eq!(record.scope.databases, vec!["db1", "db2"]);
     }
 }

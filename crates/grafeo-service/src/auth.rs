@@ -7,12 +7,49 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "auth")]
 use subtle::ConstantTimeEq;
 
+use grafeo_engine::auth::{Identity, Role};
+
+/// Map a [`Role`] to the wire-format string used in JSON storage and API responses.
+pub fn role_to_str(role: Role) -> &'static str {
+    match role {
+        Role::Admin => "admin",
+        Role::ReadWrite => "read-write",
+        Role::ReadOnly => "read-only",
+    }
+}
+
+/// Parse a wire-format string into a [`Role`].
+pub fn str_to_role(s: &str) -> Result<Role, String> {
+    match s {
+        "admin" => Ok(Role::Admin),
+        "read-write" => Ok(Role::ReadWrite),
+        "read-only" => Ok(Role::ReadOnly),
+        _ => Err(format!("unknown role: {s}")),
+    }
+}
+
+mod role_serde {
+    use super::*;
+
+    #[allow(clippy::trivially_copy_pass_by_ref)] // serde requires &T
+    pub fn serialize<S: serde::Serializer>(role: &Role, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(role_to_str(*role))
+    }
+
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Role, D::Error> {
+        let s = String::deserialize(d)?;
+        str_to_role(&s).map_err(serde::de::Error::custom)
+    }
+}
+
 /// Permission scope for a token: role + database restrictions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct TokenScope {
-    /// Permission level: "admin", "read-write", "read-only".
-    pub role: String,
+    /// Permission level: "admin", "read-write", or "read-only".
+    #[serde(with = "role_serde")]
+    #[cfg_attr(feature = "openapi", schema(value_type = String, example = "admin"))]
+    pub role: Role,
     /// Databases this token can access. Empty vec = all databases.
     #[serde(default)]
     pub databases: Vec<String>,
@@ -21,7 +58,7 @@ pub struct TokenScope {
 impl Default for TokenScope {
     fn default() -> Self {
         Self {
-            role: "admin".to_string(),
+            role: Role::Admin,
             databases: vec![],
         }
     }
@@ -43,6 +80,13 @@ pub struct TokenInfo {
     pub id: String,
     pub name: String,
     pub scope: TokenScope,
+}
+
+impl TokenInfo {
+    /// Construct an engine [`Identity`] from this token's metadata.
+    pub fn identity(&self) -> Identity {
+        Identity::new(&self.name, [self.scope.role])
+    }
 }
 
 /// Authentication provider supporting bearer tokens, token store, and HTTP Basic auth.
@@ -171,6 +215,59 @@ mod tests {
     use super::*;
 
     // -----------------------------------------------------------------------
+    // Role serde round-trip
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn role_serde_roundtrip() {
+        let scope = TokenScope {
+            role: Role::ReadWrite,
+            databases: vec!["mydb".to_string()],
+        };
+        let json = serde_json::to_string(&scope).unwrap();
+        assert!(json.contains("\"read-write\""));
+        let parsed: TokenScope = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.role, Role::ReadWrite);
+    }
+
+    #[test]
+    fn role_serde_all_variants() {
+        for (role, expected) in [
+            (Role::Admin, "admin"),
+            (Role::ReadWrite, "read-write"),
+            (Role::ReadOnly, "read-only"),
+        ] {
+            assert_eq!(role_to_str(role), expected);
+            assert_eq!(str_to_role(expected).unwrap(), role);
+        }
+    }
+
+    #[test]
+    fn str_to_role_unknown() {
+        assert!(str_to_role("superuser").is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // TokenInfo::identity
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn token_info_identity() {
+        let info = TokenInfo {
+            id: "tok-1".to_string(),
+            name: "my-service".to_string(),
+            scope: TokenScope {
+                role: Role::ReadOnly,
+                databases: vec![],
+            },
+        };
+        let id = info.identity();
+        assert_eq!(id.user_id(), "my-service");
+        assert!(id.can_read());
+        assert!(!id.can_write());
+    }
+
+    // -----------------------------------------------------------------------
     // AuthProvider::new
     // -----------------------------------------------------------------------
 
@@ -191,8 +288,6 @@ mod tests {
 
     #[test]
     fn new_returns_some_with_user_only() {
-        // User without password still creates a provider (is_enabled will be true,
-        // but check_basic will always fail because password is None).
         assert!(AuthProvider::new(None, Some("user".into()), None).is_some());
     }
 
@@ -226,7 +321,7 @@ mod tests {
     fn check_bearer_returns_admin_scope() {
         let p = AuthProvider::new(Some("secret-token".into()), None, None).unwrap();
         let info = p.check_bearer("secret-token").unwrap();
-        assert_eq!(info.scope.role, "admin");
+        assert_eq!(info.scope.role, Role::Admin);
         assert!(info.scope.databases.is_empty());
     }
 
@@ -296,14 +391,12 @@ mod tests {
 
     #[test]
     fn check_basic_no_password_configured() {
-        // User is set but password is None: check_basic always fails.
         let p = AuthProvider::new(None, Some("admin".into()), None).unwrap();
         assert!(!p.check_basic("admin", "anything"));
     }
 
     #[test]
     fn check_basic_no_basic_configured() {
-        // Only bearer configured: check_basic always fails.
         let p = AuthProvider::new(Some("token".into()), None, None).unwrap();
         assert!(!p.check_basic("admin", "pass"));
     }

@@ -2,6 +2,7 @@
 
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
+use grafeo_engine::auth::{Identity, Role};
 
 use crate::error::ApiError;
 
@@ -14,40 +15,48 @@ pub struct AuthContext(pub Option<grafeo_service::auth::TokenInfo>);
 impl AuthContext {
     /// Check that the token can access the given database. No-op when auth is off.
     pub fn check_db_access(&self, db_name: &str) -> Result<(), ApiError> {
-        if let Some(ref info) = self.0 {
-            if !info.scope.databases.is_empty()
-                && !info.scope.databases.iter().any(|d| d == db_name)
-            {
-                return Err(ApiError::forbidden(format!(
-                    "token not authorized for database '{db_name}'"
-                )));
-            }
+        if let Some(ref info) = self.0
+            && !info.scope.databases.is_empty()
+            && !info.scope.databases.iter().any(|d| d == db_name)
+        {
+            return Err(ApiError::forbidden(format!(
+                "token not authorized for database '{db_name}'"
+            )));
         }
         Ok(())
     }
 
     /// Check that the token has admin role. No-op when auth is off.
     pub fn check_admin(&self) -> Result<(), ApiError> {
-        if let Some(ref info) = self.0 {
-            if info.scope.role != "admin" {
-                return Err(ApiError::forbidden(
-                    "admin access required".to_string(),
-                ));
-            }
+        if let Some(ref info) = self.0
+            && !info.identity().can_admin()
+        {
+            return Err(ApiError::forbidden("admin access required".to_string()));
         }
         Ok(())
     }
 
     /// Check that the token can write (admin or read-write). No-op when auth is off.
     pub fn check_write(&self) -> Result<(), ApiError> {
-        if let Some(ref info) = self.0 {
-            if info.scope.role == "read-only" {
-                return Err(ApiError::forbidden(
-                    "write access required".to_string(),
-                ));
-            }
+        if let Some(ref info) = self.0
+            && !info.identity().can_write()
+        {
+            return Err(ApiError::forbidden("write access required".to_string()));
         }
         Ok(())
+    }
+
+    /// Build an engine [`Identity`] from the token, or anonymous if auth is off.
+    ///
+    /// When `server_read_only` is true, the identity is capped to [`Role::ReadOnly`]
+    /// regardless of the token's role.
+    pub fn identity(&self, server_read_only: bool) -> Identity {
+        match &self.0 {
+            Some(info) if server_read_only => Identity::new(&info.name, [Role::ReadOnly]),
+            Some(info) => info.identity(),
+            None if server_read_only => Identity::new("anonymous", [Role::ReadOnly]),
+            None => Identity::anonymous(),
+        }
     }
 }
 
@@ -57,11 +66,11 @@ where
 {
     type Rejection = std::convert::Infallible;
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        _state: &S,
-    ) -> Result<Self, Self::Rejection> {
-        let info = parts.extensions.get::<grafeo_service::auth::TokenInfo>().cloned();
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let info = parts
+            .extensions
+            .get::<grafeo_service::auth::TokenInfo>()
+            .cloned();
         Ok(AuthContext(info))
     }
 }
@@ -75,7 +84,10 @@ mod tests {
         AuthContext(Some(TokenInfo {
             id: "t1".into(),
             name: "admin".into(),
-            scope: TokenScope { role: "admin".into(), databases: vec![] },
+            scope: TokenScope {
+                role: Role::Admin,
+                databases: vec![],
+            },
         }))
     }
 
@@ -83,7 +95,10 @@ mod tests {
         AuthContext(Some(TokenInfo {
             id: "t2".into(),
             name: "scoped".into(),
-            scope: TokenScope { role: "read-write".into(), databases: dbs },
+            scope: TokenScope {
+                role: Role::ReadWrite,
+                databases: dbs,
+            },
         }))
     }
 
@@ -91,7 +106,10 @@ mod tests {
         AuthContext(Some(TokenInfo {
             id: "t3".into(),
             name: "reader".into(),
-            scope: TokenScope { role: "read-only".into(), databases: vec![] },
+            scope: TokenScope {
+                role: Role::ReadOnly,
+                databases: vec![],
+            },
         }))
     }
 
@@ -107,12 +125,16 @@ mod tests {
 
     #[test]
     fn check_db_access_scoped_allowed() {
-        scoped_ctx(vec!["mydb".into()]).check_db_access("mydb").unwrap();
+        scoped_ctx(vec!["mydb".into()])
+            .check_db_access("mydb")
+            .unwrap();
     }
 
     #[test]
     fn check_db_access_scoped_denied() {
-        scoped_ctx(vec!["mydb".into()]).check_db_access("other").unwrap_err();
+        scoped_ctx(vec!["mydb".into()])
+            .check_db_access("other")
+            .unwrap_err();
     }
 
     #[test]
@@ -148,5 +170,36 @@ mod tests {
     #[test]
     fn check_write_readonly_denied() {
         readonly_ctx().check_write().unwrap_err();
+    }
+
+    #[test]
+    fn identity_none_returns_anonymous_admin() {
+        let ctx = AuthContext(None);
+        let id = ctx.identity(false);
+        assert!(id.can_admin());
+    }
+
+    #[test]
+    fn identity_none_read_only_server() {
+        let ctx = AuthContext(None);
+        let id = ctx.identity(true);
+        assert!(id.can_read());
+        assert!(!id.can_write());
+    }
+
+    #[test]
+    fn identity_admin_capped_by_server_read_only() {
+        let ctx = admin_ctx();
+        let id = ctx.identity(true);
+        assert!(id.can_read());
+        assert!(!id.can_write());
+    }
+
+    #[test]
+    fn identity_preserves_role_when_not_read_only() {
+        let ctx = readonly_ctx();
+        let id = ctx.identity(false);
+        assert!(id.can_read());
+        assert!(!id.can_write());
     }
 }

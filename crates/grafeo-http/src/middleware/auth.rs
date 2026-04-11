@@ -57,19 +57,19 @@ pub async fn auth_middleware(
     let auth_header_ref = auth_header.as_deref();
 
     // Try Bearer token
-    if let Some(token) = auth_header_ref.and_then(|v| v.strip_prefix("Bearer ")) {
-        if let Some(info) = auth_provider.check_bearer(token) {
-            req.extensions_mut().insert(info);
-            return Ok(next.run(req).await);
-        }
+    if let Some(token) = auth_header_ref.and_then(|v| v.strip_prefix("Bearer "))
+        && let Some(info) = auth_provider.check_bearer(token)
+    {
+        req.extensions_mut().insert(info);
+        return Ok(next.run(req).await);
     }
 
     // Try API key header (checked against the same token set)
-    if let Some(key) = req.headers().get("x-api-key").and_then(|v| v.to_str().ok()) {
-        if let Some(info) = auth_provider.check_bearer(key) {
-            req.extensions_mut().insert(info);
-            return Ok(next.run(req).await);
-        }
+    if let Some(key) = req.headers().get("x-api-key").and_then(|v| v.to_str().ok())
+        && let Some(info) = auth_provider.check_bearer(key)
+    {
+        req.extensions_mut().insert(info);
+        return Ok(next.run(req).await);
     }
 
     // Try HTTP Basic auth (always admin scope)

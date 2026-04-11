@@ -30,14 +30,11 @@ pub async fn create_token(
 ) -> Result<Json<types::TokenResponse>, ApiError> {
     auth.check_admin()?;
 
-    let store = state
-        .auth()
-        .and_then(|a| a.token_store())
-        .ok_or_else(|| {
-            grafeo_service::error::ServiceError::BadRequest(
-                "token management not configured".to_string(),
-            )
-        })?;
+    let store = state.auth().and_then(|a| a.token_store()).ok_or_else(|| {
+        grafeo_service::error::ServiceError::BadRequest(
+            "token management not configured".to_string(),
+        )
+    })?;
 
     let (record, plaintext) =
         grafeo_service::token_service::TokenService::create_token(store, req.name, req.scope)
@@ -47,7 +44,7 @@ pub async fn create_token(
         id: record.id,
         name: record.name,
         scope: types::TokenScopeRequest {
-            role: record.scope.role,
+            role: grafeo_service::auth::role_to_str(record.scope.role).to_string(),
             databases: record.scope.databases,
         },
         created_at: record.created_at,
@@ -74,14 +71,11 @@ pub async fn list_tokens(
 ) -> Result<Json<Vec<types::TokenResponse>>, ApiError> {
     auth.check_admin()?;
 
-    let store = state
-        .auth()
-        .and_then(|a| a.token_store())
-        .ok_or_else(|| {
-            grafeo_service::error::ServiceError::BadRequest(
-                "token management not configured".to_string(),
-            )
-        })?;
+    let store = state.auth().and_then(|a| a.token_store()).ok_or_else(|| {
+        grafeo_service::error::ServiceError::BadRequest(
+            "token management not configured".to_string(),
+        )
+    })?;
 
     let tokens = grafeo_service::token_service::TokenService::list_tokens(store);
     Ok(Json(tokens))
@@ -110,14 +104,11 @@ pub async fn get_token(
 ) -> Result<Json<types::TokenResponse>, ApiError> {
     auth.check_admin()?;
 
-    let store = state
-        .auth()
-        .and_then(|a| a.token_store())
-        .ok_or_else(|| {
-            grafeo_service::error::ServiceError::BadRequest(
-                "token management not configured".to_string(),
-            )
-        })?;
+    let store = state.auth().and_then(|a| a.token_store()).ok_or_else(|| {
+        grafeo_service::error::ServiceError::BadRequest(
+            "token management not configured".to_string(),
+        )
+    })?;
 
     let token = grafeo_service::token_service::TokenService::get_token(store, &id)
         .map_err(ApiError::from)?;
@@ -148,14 +139,11 @@ pub async fn delete_token(
 ) -> Result<impl IntoResponse, ApiError> {
     auth.check_admin()?;
 
-    let store = state
-        .auth()
-        .and_then(|a| a.token_store())
-        .ok_or_else(|| {
-            grafeo_service::error::ServiceError::BadRequest(
-                "token management not configured".to_string(),
-            )
-        })?;
+    let store = state.auth().and_then(|a| a.token_store()).ok_or_else(|| {
+        grafeo_service::error::ServiceError::BadRequest(
+            "token management not configured".to_string(),
+        )
+    })?;
 
     grafeo_service::token_service::TokenService::delete_token(store, &id)
         .map_err(ApiError::from)?;

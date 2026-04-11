@@ -96,6 +96,7 @@ pub async fn graph_store_get(
         None,
         timeout,
         state.service().is_query_read_only(),
+        None,
     )
     .await?;
 
@@ -151,6 +152,7 @@ pub async fn graph_store_head(
         None,
         timeout,
         state.service().is_query_read_only(),
+        None,
     )
     .await?;
 
@@ -215,6 +217,7 @@ pub async fn graph_store_put(
         None,
         timeout,
         state.service().is_query_read_only(),
+        None,
     )
     .await?;
 
@@ -230,6 +233,7 @@ pub async fn graph_store_put(
             None,
             timeout,
             state.service().is_query_read_only(),
+            None,
         )
         .await?;
     }
@@ -269,6 +273,7 @@ pub async fn graph_store_post(
             None,
             timeout,
             state.service().is_query_read_only(),
+            None,
         )
         .await?;
 
@@ -284,6 +289,7 @@ pub async fn graph_store_post(
                 None,
                 timeout,
                 state.service().is_query_read_only(),
+                None,
             )
             .await?;
         }
@@ -312,6 +318,7 @@ pub async fn graph_store_post(
             None,
             timeout,
             state.service().is_query_read_only(),
+            None,
         )
         .await?;
     }
@@ -347,6 +354,7 @@ pub async fn graph_store_delete(
         None,
         timeout,
         state.service().is_query_read_only(),
+        None,
     )
     .await;
 

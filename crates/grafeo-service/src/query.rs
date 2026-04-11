@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use grafeo_engine::auth::{Identity, Role};
 use grafeo_engine::database::QueryResult;
 
 use crate::database::DatabaseManager;
@@ -15,6 +16,20 @@ use crate::error::ServiceError;
 use crate::metrics::{Language, Metrics, determine_language};
 use crate::session::{ManagedSession, SessionRegistry};
 use crate::types::BatchQuery;
+
+/// Create a session from a database handle, using the provided identity
+/// or falling back to read_only / full-access based on the flag.
+fn create_session(
+    db: &grafeo_engine::GrafeoDB,
+    identity: Option<Identity>,
+    read_only: bool,
+) -> grafeo_engine::Session {
+    match identity {
+        Some(id) => db.session_with_identity(id),
+        None if read_only => db.session_with_role(Role::ReadOnly),
+        None => db.session(),
+    }
+}
 
 /// Centralized query execution service.
 ///
@@ -37,6 +52,7 @@ impl QueryService {
         params: Option<HashMap<String, grafeo_common::Value>>,
         timeout: Option<Duration>,
         read_only: bool,
+        identity: Option<Identity>,
     ) -> Result<QueryResult, ServiceError> {
         let entry = databases.get_available(db_name)?;
 
@@ -45,11 +61,7 @@ impl QueryService {
 
         let result = run_with_timeout(timeout, move || {
             let db = entry.db();
-            let session = if read_only {
-                db.session_read_only()
-            } else {
-                db.session()
-            };
+            let session = create_session(&db, identity, read_only);
             dispatch_query(&session, &stmt, lang, params.as_ref())
         })
         .await;
@@ -111,17 +123,14 @@ impl QueryService {
         sessions: &SessionRegistry,
         db_name: &str,
         read_only: bool,
+        identity: Option<Identity>,
     ) -> Result<String, ServiceError> {
         let entry = databases.get_available(db_name)?;
 
         let db_name = db_name.to_owned();
         let session_id = tokio::task::spawn_blocking(move || {
             let db = entry.db();
-            let mut engine_session = if read_only {
-                db.session_read_only()
-            } else {
-                db.session()
-            };
+            let mut engine_session = create_session(&db, identity, read_only);
             engine_session
                 .begin_transaction()
                 .map_err(|e| ServiceError::Internal(e.to_string()))?;
@@ -191,6 +200,7 @@ impl QueryService {
         queries: Vec<BatchQuery>,
         timeout: Option<Duration>,
         read_only: bool,
+        identity: Option<Identity>,
     ) -> Result<Vec<QueryResult>, ServiceError> {
         if queries.is_empty() {
             return Ok(vec![]);
@@ -207,11 +217,7 @@ impl QueryService {
 
         let results = run_with_timeout(timeout, move || {
             let db = entry.db();
-            let mut session = if read_only {
-                db.session_read_only()
-            } else {
-                db.session()
-            };
+            let mut session = create_session(&db, identity, read_only);
             session
                 .begin_transaction()
                 .map_err(|e| ServiceError::Internal(e.to_string()))?;
@@ -348,7 +354,14 @@ fn dispatch_query(
         }
     };
 
-    result.map_err(|e| ServiceError::BadRequest(e.to_string()))
+    result.map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("permission denied") {
+            ServiceError::Forbidden(msg)
+        } else {
+            ServiceError::BadRequest(msg)
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -408,6 +421,7 @@ mod tests {
             None,
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -426,6 +440,7 @@ mod tests {
             None,
             None,
             false,
+            None,
         )
         .await
         .unwrap_err();
@@ -444,6 +459,7 @@ mod tests {
             None,
             None,
             false,
+            None,
         )
         .await
         .unwrap_err();
@@ -464,6 +480,7 @@ mod tests {
             Some(params),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -484,6 +501,7 @@ mod tests {
             None,
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -502,6 +520,7 @@ mod tests {
             None,
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -521,6 +540,7 @@ mod tests {
             None,
             None,
             false,
+            None,
         )
         .await;
         let rendered = s.metrics().render(0, 0, 0, 0, 0, None);
@@ -540,6 +560,7 @@ mod tests {
             None,
             Some(Duration::from_secs(10)),
             false,
+            None,
         )
         .await
         .unwrap();
@@ -553,7 +574,7 @@ mod tests {
     #[tokio::test]
     async fn begin_tx_returns_session_id() {
         let s = state();
-        let id = QueryService::begin_tx(s.databases(), s.sessions(), "default", false)
+        let id = QueryService::begin_tx(s.databases(), s.sessions(), "default", false, None)
             .await
             .unwrap();
         assert!(!id.is_empty());
@@ -562,7 +583,7 @@ mod tests {
     #[tokio::test]
     async fn begin_tx_not_found_database() {
         let s = state();
-        let err = QueryService::begin_tx(s.databases(), s.sessions(), "no_such_db", false)
+        let err = QueryService::begin_tx(s.databases(), s.sessions(), "no_such_db", false, None)
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::NotFound(_)));
@@ -571,7 +592,7 @@ mod tests {
     #[tokio::test]
     async fn tx_execute_then_commit() {
         let s = state();
-        let id = QueryService::begin_tx(s.databases(), s.sessions(), "default", false)
+        let id = QueryService::begin_tx(s.databases(), s.sessions(), "default", false, None)
             .await
             .unwrap();
 
@@ -601,7 +622,7 @@ mod tests {
     #[tokio::test]
     async fn tx_execute_then_rollback() {
         let s = state();
-        let id = QueryService::begin_tx(s.databases(), s.sessions(), "default", false)
+        let id = QueryService::begin_tx(s.databases(), s.sessions(), "default", false, None)
             .await
             .unwrap();
 
@@ -672,10 +693,17 @@ mod tests {
     #[tokio::test]
     async fn batch_empty_returns_empty() {
         let s = state();
-        let results =
-            QueryService::batch_execute(s.databases(), s.metrics(), "default", vec![], None, false)
-                .await
-                .unwrap();
+        let results = QueryService::batch_execute(
+            s.databases(),
+            s.metrics(),
+            "default",
+            vec![],
+            None,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
         assert!(results.is_empty());
     }
 
@@ -693,6 +721,7 @@ mod tests {
             }],
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -725,6 +754,7 @@ mod tests {
             ],
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -754,6 +784,7 @@ mod tests {
             ],
             None,
             false,
+            None,
         )
         .await
         .unwrap_err();
@@ -775,6 +806,7 @@ mod tests {
             None,
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -798,6 +830,7 @@ mod tests {
             ],
             None,
             false,
+            None,
         )
         .await;
 
@@ -811,6 +844,7 @@ mod tests {
             None,
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -831,6 +865,7 @@ mod tests {
             }],
             None,
             false,
+            None,
         )
         .await
         .unwrap_err();
@@ -874,7 +909,7 @@ mod tests {
     #[tokio::test]
     async fn get_session_after_begin() {
         let s = state();
-        let id = QueryService::begin_tx(s.databases(), s.sessions(), "default", false)
+        let id = QueryService::begin_tx(s.databases(), s.sessions(), "default", false, None)
             .await
             .unwrap();
         let session = QueryService::get_session(s.sessions(), &id, 300);

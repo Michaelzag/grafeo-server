@@ -33,6 +33,8 @@ async fn spawn_primary() -> String {
         auth_user: None,
         #[cfg(feature = "auth")]
         auth_password: None,
+        #[cfg(feature = "auth")]
+        token_store_path: None,
         #[cfg(feature = "replication")]
         replication_mode: grafeo_service::replication::ReplicationMode::Primary,
         backup_dir: None,
@@ -64,6 +66,8 @@ async fn spawn_replica(primary_url: &str) -> String {
         auth_user: None,
         #[cfg(feature = "auth")]
         auth_password: None,
+        #[cfg(feature = "auth")]
+        token_store_path: None,
         #[cfg(feature = "replication")]
         replication_mode: grafeo_service::replication::ReplicationMode::Replica {
             primary_url: primary_url.to_string(),

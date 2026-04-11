@@ -36,6 +36,7 @@ subtle = { version = "2", optional = true }
 sha2 = { version = "0.10", optional = true }
 rand = { version = "0.9", optional = true }
 hex = { version = "0.4", optional = true }
+chrono = { version = "0.4", optional = true }
 
 # OpenAPI (optional — activated by HTTP transport crate)
 utoipa = { version = "5", optional = true }
@@ -110,7 +111,7 @@ push-changefeed = ["sync"]
 replication = ["sync"]
 
 # Auth provider
-auth = ["dep:subtle", "dep:sha2", "dep:rand", "dep:hex"]
+auth = ["dep:subtle", "dep:sha2", "dep:rand", "dep:hex", "dep:chrono"]
 
 # OpenAPI schema derives (utoipa::ToSchema)
 openapi = ["dep:utoipa"]

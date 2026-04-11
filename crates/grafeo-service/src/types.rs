@@ -489,6 +489,13 @@ impl Default for TokenScopeRequest {
     }
 }
 
+impl TokenScopeRequest {
+    /// Parse the wire-format role string into the engine's [`Role`] enum.
+    pub fn to_role(&self) -> Result<grafeo_engine::auth::Role, crate::error::ServiceError> {
+        crate::auth::str_to_role(&self.role).map_err(crate::error::ServiceError::BadRequest)
+    }
+}
+
 fn default_admin_role() -> String {
     "admin".to_string()
 }

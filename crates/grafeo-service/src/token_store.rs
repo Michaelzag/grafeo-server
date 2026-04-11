@@ -4,8 +4,6 @@
 //! Reads go through a `RwLock` for concurrent access. Writes serialize
 //! to a temp file and rename atomically.
 
-#![cfg(feature = "auth")]
-
 use std::path::PathBuf;
 
 use parking_lot::RwLock;
@@ -97,7 +95,11 @@ impl TokenStore {
 
     /// Find a token record by its SHA-256 hash.
     pub fn find_by_hash(&self, hash: &str) -> Option<TokenRecord> {
-        self.tokens.read().iter().find(|t| t.token_hash == hash).cloned()
+        self.tokens
+            .read()
+            .iter()
+            .find(|t| t.token_hash == hash)
+            .cloned()
     }
 
     /// Get a token record by ID.

@@ -131,15 +131,25 @@ impl ServiceState {
                 #[cfg(feature = "auth")]
                 auth: {
                     // Resolve token store path: explicit > {data_dir}/tokens.json > None
+                    // Only auto-derive from data_dir when at least one credential
+                    // is configured, so data_dir alone doesn't activate auth.
+                    let has_credentials = config.auth_token.is_some()
+                        || config.auth_user.is_some();
                     let store_path = config.token_store_path.clone().or_else(|| {
+                        if !has_credentials {
+                            return None;
+                        }
                         config.data_dir.as_ref().map(|d| {
-                            PathBuf::from(d).join("tokens.json").to_string_lossy().into_owned()
+                            PathBuf::from(d)
+                                .join("tokens.json")
+                                .to_string_lossy()
+                                .into_owned()
                         })
                     });
                     if let Some(ref path) = store_path {
                         let store = Arc::new(
                             token_store::TokenStore::load(path)
-                                .unwrap_or_else(|e| panic!("failed to load token store: {e}"))
+                                .unwrap_or_else(|e| panic!("failed to load token store: {e}")),
                         );
                         auth::AuthProvider::with_token_store(
                             config.auth_token.clone(),
