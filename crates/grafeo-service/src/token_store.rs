@@ -49,17 +49,18 @@ impl TokenStore {
         })
     }
 
-    /// Write current state to disk atomically (write tmp, rename).
-    fn save(&self) -> Result<(), String> {
-        let tokens = self.tokens.read();
-        let json = serde_json::to_string_pretty(&*tokens)
+    /// Serialize `tokens` to JSON and write to disk atomically (write tmp, rename).
+    ///
+    /// Caller must hold the write lock to prevent concurrent saves from
+    /// clobbering each other's temp file.
+    fn save_locked(tokens: &[TokenRecord], path: &std::path::Path) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(tokens)
             .map_err(|e| format!("failed to serialize tokens: {e}"))?;
-        drop(tokens);
 
-        let tmp_path = self.path.with_extension("json.tmp");
+        let tmp_path = path.with_extension("json.tmp");
         std::fs::write(&tmp_path, &json)
             .map_err(|e| format!("failed to write token store tmp: {e}"))?;
-        std::fs::rename(&tmp_path, &self.path)
+        std::fs::rename(&tmp_path, path)
             .map_err(|e| format!("failed to rename token store: {e}"))?;
 
         Ok(())
@@ -67,23 +68,19 @@ impl TokenStore {
 
     /// Insert a token record and persist to disk.
     pub fn insert(&self, record: TokenRecord) -> Result<(), String> {
-        {
-            let mut tokens = self.tokens.write();
-            tokens.push(record);
-        }
-        self.save()
+        let mut tokens = self.tokens.write();
+        tokens.push(record);
+        Self::save_locked(&tokens, &self.path)
     }
 
     /// Remove a token by ID. Returns true if found and removed.
     pub fn remove(&self, id: &str) -> Result<bool, String> {
-        let removed = {
-            let mut tokens = self.tokens.write();
-            let before = tokens.len();
-            tokens.retain(|t| t.id != id);
-            tokens.len() < before
-        };
+        let mut tokens = self.tokens.write();
+        let before = tokens.len();
+        tokens.retain(|t| t.id != id);
+        let removed = tokens.len() < before;
         if removed {
-            self.save()?;
+            Self::save_locked(&tokens, &self.path)?;
         }
         Ok(removed)
     }

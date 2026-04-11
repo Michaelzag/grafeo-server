@@ -95,6 +95,10 @@ pub use state::AppState;
         routes::search::vector_search,
         routes::search::text_search,
         routes::search::hybrid_search,
+        routes::tokens::create_token,
+        routes::tokens::list_tokens,
+        routes::tokens::get_token,
+        routes::tokens::delete_token,
     ),
     components(
         schemas(
