@@ -27,12 +27,12 @@ fn sparql_results_json(result: &QueryResult) -> String {
     // Detect ASK queries: single boolean column.
     if is_ask_result(result) {
         let boolean = result
-            .rows
+            .rows()
             .first()
             .and_then(|row| row.first())
             .and_then(|v| {
-                if let grafeo_common::Value::Bool(b) = v {
-                    Some(*b)
+                if let grafeo_common::Value::Bool(b) = *v {
+                    Some(b)
                 } else {
                     None
                 }
@@ -47,8 +47,8 @@ fn sparql_results_json(result: &QueryResult) -> String {
     }
 
     // SELECT result: build bindings array.
-    let mut bindings = Vec::with_capacity(result.rows.len());
-    for row in &result.rows {
+    let mut bindings = Vec::with_capacity(result.rows().len());
+    for row in result.rows() {
         let mut binding = serde_json::Map::new();
         for (i, value) in row.iter().enumerate() {
             if matches!(value, grafeo_common::Value::Null) {
@@ -120,12 +120,12 @@ fn sparql_term_json(value: &grafeo_common::Value) -> serde_json::Value {
 ///
 /// ASK queries produce a single row with a single boolean column.
 fn is_ask_result(result: &QueryResult) -> bool {
-    if result.columns.len() != 1 || result.rows.len() > 1 {
+    if result.columns.len() != 1 || result.rows().len() > 1 {
         return false;
     }
     // Check if the single column is a boolean.
     result
-        .rows
+        .rows()
         .first()
         .and_then(|row| row.first())
         .is_some_and(|v| matches!(v, grafeo_common::Value::Bool(_)))
@@ -137,13 +137,9 @@ mod tests {
     use grafeo_common::Value;
 
     fn make_select_result() -> QueryResult {
-        QueryResult {
-            columns: vec!["s".to_string(), "name".to_string()],
-            column_types: vec![
-                grafeo_common::types::LogicalType::String,
-                grafeo_common::types::LogicalType::String,
-            ],
-            rows: vec![
+        QueryResult::from_rows(
+            vec!["s".to_string(), "name".to_string()],
+            vec![
                 vec![
                     Value::String("http://example.org/alix".into()),
                     Value::String("Alix".into()),
@@ -153,11 +149,8 @@ mod tests {
                     Value::String("Gus".into()),
                 ],
             ],
-            execution_time_ms: Some(1.0),
-            rows_scanned: Some(2),
-            status_message: None,
-            gql_status: grafeo_common::utils::GqlStatus::SUCCESS,
-        }
+        )
+        .with_metrics(1.0, 2)
     }
 
     #[test]
@@ -180,15 +173,8 @@ mod tests {
 
     #[test]
     fn ask_result_has_boolean() {
-        let result = QueryResult {
-            columns: vec!["_ask".to_string()],
-            column_types: vec![grafeo_common::types::LogicalType::Bool],
-            rows: vec![vec![Value::Bool(true)]],
-            execution_time_ms: None,
-            rows_scanned: None,
-            status_message: None,
-            gql_status: grafeo_common::utils::GqlStatus::SUCCESS,
-        };
+        let result =
+            QueryResult::from_rows(vec!["_ask".to_string()], vec![vec![Value::Bool(true)]]);
         let json_str = sparql_results_json(&result);
         let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
@@ -198,21 +184,13 @@ mod tests {
 
     #[test]
     fn null_values_omitted_from_bindings() {
-        let result = QueryResult {
-            columns: vec!["s".to_string(), "o".to_string()],
-            column_types: vec![
-                grafeo_common::types::LogicalType::String,
-                grafeo_common::types::LogicalType::String,
-            ],
-            rows: vec![vec![
+        let result = QueryResult::from_rows(
+            vec!["s".to_string(), "o".to_string()],
+            vec![vec![
                 Value::String("http://example.org/s".into()),
                 Value::Null,
             ]],
-            execution_time_ms: None,
-            rows_scanned: None,
-            status_message: None,
-            gql_status: grafeo_common::utils::GqlStatus::SUCCESS,
-        };
+        );
         let json_str = sparql_results_json(&result);
         let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
@@ -223,15 +201,8 @@ mod tests {
 
     #[test]
     fn numeric_literals_have_datatype() {
-        let result = QueryResult {
-            columns: vec!["count".to_string()],
-            column_types: vec![grafeo_common::types::LogicalType::Int64],
-            rows: vec![vec![Value::Int64(42)]],
-            execution_time_ms: None,
-            rows_scanned: None,
-            status_message: None,
-            gql_status: grafeo_common::utils::GqlStatus::SUCCESS,
-        };
+        let result =
+            QueryResult::from_rows(vec!["count".to_string()], vec![vec![Value::Int64(42)]]);
         let json_str = sparql_results_json(&result);
         let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 

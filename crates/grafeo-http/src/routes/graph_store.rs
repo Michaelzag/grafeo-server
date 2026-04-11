@@ -102,7 +102,7 @@ pub async fn graph_store_get(
     // CONSTRUCT results come back as rows with columns [subject, predicate, object].
     // Serialize as N-Triples.
     let mut body = String::new();
-    for row in &result.rows {
+    for row in result.rows() {
         if row.len() >= 3 {
             let s = value_to_nt_term(&row[0]);
             let p = value_to_nt_term(&row[1]);
@@ -160,12 +160,12 @@ pub async fn graph_store_head(
         GraphTarget::Named(_) => {
             // ASK returns a single boolean row. If true, graph has data.
             let has_data = result
-                .rows
+                .rows()
                 .first()
                 .and_then(|row| row.first())
                 .and_then(|v| {
-                    if let grafeo_common::Value::Bool(b) = v {
-                        Some(*b)
+                    if let grafeo_common::Value::Bool(b) = *v {
+                        Some(b)
                     } else {
                         None
                     }

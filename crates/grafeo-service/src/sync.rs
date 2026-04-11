@@ -639,6 +639,7 @@ fn to_dto(event: grafeo_engine::cdc::ChangeEvent) -> ChangeEventDto {
         grafeo_engine::cdc::EntityId::Node(n) => (n.as_u64(), "node".to_string()),
         grafeo_engine::cdc::EntityId::Edge(e) => (e.as_u64(), "edge".to_string()),
         grafeo_engine::cdc::EntityId::Triple(h) => (h, "triple".to_string()),
+        _ => (0, "unknown".to_string()),
     };
     let kind = match event.kind {
         grafeo_engine::cdc::ChangeKind::Create => "create".to_string(),

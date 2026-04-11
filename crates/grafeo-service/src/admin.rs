@@ -450,7 +450,7 @@ impl AdminService {
         .await?;
 
         Ok(result
-            .rows
+            .into_rows()
             .into_iter()
             .filter_map(|row| {
                 row.into_iter()

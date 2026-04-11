@@ -811,7 +811,7 @@ impl ResultStream for GrafeoResultStream {
                     })
                     .collect();
 
-                let has_data = !self.result.rows.is_empty() || !columns.is_empty();
+                let has_data = !self.result.rows().is_empty() || !columns.is_empty();
 
                 let header = ResultFrame::Header(proto::ResultHeader {
                     result_type: if has_data {
@@ -823,7 +823,7 @@ impl ResultStream for GrafeoResultStream {
                     ordered: false,
                 });
 
-                self.phase = if self.result.rows.is_empty() {
+                self.phase = if self.result.rows().is_empty() {
                     StreamPhase::Summary
                 } else {
                     StreamPhase::Rows { offset: 0 }
@@ -833,8 +833,8 @@ impl ResultStream for GrafeoResultStream {
             }
 
             StreamPhase::Rows { offset } => {
-                let end = (offset + self.batch_size).min(self.result.rows.len());
-                let rows: Vec<proto::Row> = self.result.rows[offset..end]
+                let end = (offset + self.batch_size).min(self.result.rows().len());
+                let rows: Vec<proto::Row> = self.result.rows()[offset..end]
                     .iter()
                     .map(|row| proto::Row {
                         values: row
@@ -846,7 +846,7 @@ impl ResultStream for GrafeoResultStream {
 
                 let frame = ResultFrame::Batch(proto::RowBatch { rows });
 
-                self.phase = if end >= self.result.rows.len() {
+                self.phase = if end >= self.result.rows().len() {
                     StreamPhase::Summary
                 } else {
                     StreamPhase::Rows { offset: end }
@@ -867,7 +867,7 @@ impl ResultStream for GrafeoResultStream {
                 let summary = ResultFrame::Summary(proto::ResultSummary {
                     status: Some(status::success()),
                     warnings: Vec::new(),
-                    rows_affected: self.result.rows.len() as i64,
+                    rows_affected: self.result.rows().len() as i64,
                     counters,
                 });
 
@@ -890,17 +890,13 @@ mod tests {
     use std::pin::Pin;
 
     fn make_result(num_rows: usize) -> QueryResult {
-        QueryResult {
-            columns: vec!["x".to_string()],
-            column_types: vec![LogicalType::Int64],
-            rows: (0..num_rows)
-                .map(|i| vec![Value::Int64(i as i64)])
-                .collect(),
-            execution_time_ms: Some(1.0),
-            rows_scanned: Some(num_rows as u64),
-            status_message: None,
-            gql_status: grafeo_common::utils::GqlStatus::SUCCESS,
-        }
+        let rows = (0..num_rows)
+            .map(|i| vec![Value::Int64(i as i64)])
+            .collect();
+        let mut result =
+            QueryResult::from_rows(vec!["x".to_string()], rows).with_metrics(1.0, num_rows as u64);
+        result.column_types = vec![LogicalType::Int64];
+        result
     }
 
     /// Collects all frames from a `GrafeoResultStream`.

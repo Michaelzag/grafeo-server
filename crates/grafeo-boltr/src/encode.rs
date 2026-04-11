@@ -8,7 +8,6 @@ use boltr::types::{BoltDict, BoltValue};
 pub fn grafeo_to_bolt(value: &grafeo_common::Value) -> BoltValue {
     use grafeo_common::Value;
     match value {
-        Value::Null => BoltValue::Null,
         Value::Bool(b) => BoltValue::Boolean(*b),
         Value::Int64(i) => BoltValue::Integer(*i),
         Value::Float64(f) => BoltValue::Float(*f),
@@ -88,6 +87,7 @@ pub fn grafeo_to_bolt(value: &grafeo_common::Value) -> BoltValue {
             let neg_sum: u64 = neg.values().sum();
             BoltValue::Integer(pos_sum as i64 - neg_sum as i64)
         }
+        _ => BoltValue::Null,
     }
 }
 

@@ -5,6 +5,39 @@ All notable changes to grafeo-server are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.35] - 2026-04-11
+
+Backup/restore, CDC error handling, and engine 0.5.35 alignment (non-exhaustive enums, private QueryResult rows, new feature flags).
+
+### Added
+
+- **Backup/restore endpoints**: hot snapshots via MVCC, no write downtime ([#53](https://github.com/GrafeoDB/grafeo-server/pull/53) by [@Michaelzag](https://github.com/Michaelzag))
+  - `POST /admin/{db}/backup`: create a `.grafeo` snapshot
+  - `GET /admin/{db}/backups`: list backups for a database
+  - `GET /backups`: list all backups across databases
+  - `POST /admin/{db}/restore`: restore from a backup file (automatic safety backup before restore)
+  - `DELETE /backups/{filename}`: delete a backup file
+  - `GET /backups/download/{filename}`: download a backup file
+- **CLI flags**: `--backup-dir` (backup storage directory), `--backup-retention` (keep N most recent per database)
+- **ArcSwap database handle**: `DatabaseEntry.db` changed from `Arc<GrafeoDB>` to `ArcSwap<GrafeoDB>` for lock-free hot-swapping during restore. Callers get 503 during restore instead of 404 ([#53](https://github.com/GrafeoDB/grafeo-server/pull/53) by [@Michaelzag](https://github.com/Michaelzag))
+- **Sync pull CDC validation**: `POST /sync/{db}/pull` now returns 400 with an explanatory message when CDC is not enabled on the database, instead of silently returning empty results ([#55](https://github.com/GrafeoDB/grafeo-server/pull/55) by [@Michaelzag](https://github.com/Michaelzag))
+- **`lpg` feature flag**: new explicit LPG data model feature, forwarded through `grafeo-service` to `grafeo-engine/lpg`. Included in `default` and `full` tiers
+- **`triple-store` feature flag**: replaces `rdf` as the canonical name for RDF/triple store support. `rdf` kept as deprecated alias
+
+### Changed
+
+- **grafeo-engine 0.5.35**: section-based container format, `grafeo-storage` crate extraction, incremental backup API (`backup_full()`/`backup_incremental()`/`restore_to_epoch()`), CDC retention and eviction, WAL replay fix, block-based LPG/RDF section formats, persona-based feature profiles
+- **`QueryResult.rows` now private**: all access migrated to `.rows()`, `.into_rows()`, and `QueryResult::from_rows()` constructor
+- **`#[non_exhaustive]` on all engine enums**: all `match` on `Value`, `EntityId`, `ChangeKind`, `SchemaInfo` now include wildcard arms
+- **Feature rename**: `rdf` -> `triple-store` in `grafeo-service` and binary crate features. `sparql` feature now depends on `triple-store` directly
+- **`full` tier updated**: includes `lpg` and uses `triple-store` instead of deprecated `rdf` alias
+
+### Fixed (via engine 0.5.35)
+
+- WAL not replayed on reopen: data no longer lost across restarts without explicit checkpoint ([grafeo#252](https://github.com/GrafeoDB/grafeo/issues/252))
+- CDC event log unbounded memory: epoch-based and count-based retention with BufferManager eviction ([grafeo#250](https://github.com/GrafeoDB/grafeo/issues/250))
+- Graph/schema context validation: reject nonexistent targets, `drop_graph()` auto-clears active context ([grafeo#245](https://github.com/GrafeoDB/grafeo/issues/245))
+
 ## [0.5.34] - 2026-04-07
 
 Schema hierarchy, compact endpoint, bulk import, and two engine releases worth of query correctness fixes.

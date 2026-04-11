@@ -24,7 +24,7 @@ impl<'a> RowBatchIter<'a> {
     /// Creates a new batch iterator over the given result's rows.
     pub fn new(result: &'a QueryResult, batch_size: usize) -> Self {
         Self {
-            rows: &result.rows,
+            rows: result.rows(),
             batch_size: batch_size.max(1),
             offset: 0,
         }
@@ -74,17 +74,13 @@ mod tests {
     use grafeo_common::types::LogicalType;
 
     fn make_result(num_rows: usize) -> QueryResult {
-        QueryResult {
-            columns: vec!["x".to_string()],
-            column_types: vec![LogicalType::Int64],
-            rows: (0..num_rows)
-                .map(|i| vec![Value::Int64(i as i64)])
-                .collect(),
-            execution_time_ms: Some(1.0),
-            rows_scanned: Some(num_rows as u64),
-            status_message: None,
-            gql_status: grafeo_common::utils::GqlStatus::SUCCESS,
-        }
+        let rows = (0..num_rows)
+            .map(|i| vec![Value::Int64(i as i64)])
+            .collect();
+        let mut result =
+            QueryResult::from_rows(vec!["x".to_string()], rows).with_metrics(1.0, num_rows as u64);
+        result.column_types = vec![LogicalType::Int64];
+        result
     }
 
     #[test]
