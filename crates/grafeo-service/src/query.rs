@@ -468,7 +468,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(qr.columns, vec!["val"]);
-        assert_eq!(qr.rows.len(), 1);
+        assert_eq!(qr.rows().len(), 1);
     }
 
     #[tokio::test]
@@ -487,7 +487,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(qr.rows.is_empty());
+        assert!(qr.rows().is_empty());
     }
 
     #[tokio::test]
@@ -543,7 +543,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(qr.rows.is_empty());
+        assert!(qr.rows().is_empty());
     }
 
     // -----------------------------------------------------------------------
@@ -587,7 +587,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(qr.rows.len(), 1);
+        assert_eq!(qr.rows().len(), 1);
 
         QueryService::commit(s.sessions(), &id, 300).await.unwrap();
 
@@ -730,7 +730,7 @@ mod tests {
         .unwrap();
         assert_eq!(results.len(), 3);
         // The third query should see both nodes created in the same transaction.
-        assert_eq!(results[2].rows.len(), 2);
+        assert_eq!(results[2].rows().len(), 2);
     }
 
     #[tokio::test]
@@ -814,7 +814,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(qr.rows.len(), 1);
+        assert_eq!(qr.rows().len(), 1);
     }
 
     #[tokio::test]
@@ -848,7 +848,7 @@ mod tests {
         let session = entry.db().session();
         let qr =
             QueryService::dispatch(&session, "MATCH (n) RETURN n LIMIT 0", None, None).unwrap();
-        assert!(qr.rows.is_empty());
+        assert!(qr.rows().is_empty());
     }
 
     #[tokio::test]

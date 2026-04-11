@@ -8,7 +8,6 @@ use gwp::types::Value as GwpValue;
 pub fn grafeo_to_gwp(value: &grafeo_common::Value) -> GwpValue {
     use grafeo_common::Value;
     match value {
-        Value::Null => GwpValue::Null,
         Value::Bool(b) => GwpValue::Boolean(*b),
         Value::Int64(i) => GwpValue::Integer(*i),
         Value::Float64(f) => GwpValue::Float(*f),
@@ -124,6 +123,7 @@ pub fn grafeo_to_gwp(value: &grafeo_common::Value) -> GwpValue {
                 ],
             })
         }
+        _ => GwpValue::Null,
     }
 }
 

@@ -22,7 +22,6 @@ use crate::types::QueryResponse;
 pub fn value_to_json(value: &grafeo_common::Value) -> serde_json::Value {
     use grafeo_common::Value;
     match value {
-        Value::Null => serde_json::Value::Null,
         Value::Bool(b) => serde_json::Value::Bool(*b),
         Value::Int64(i) => serde_json::json!(i),
         Value::Float64(f) => serde_json::json!(f),
@@ -59,6 +58,7 @@ pub fn value_to_json(value: &grafeo_common::Value) -> serde_json::Value {
             let neg_sum: i64 = neg.values().copied().map(|v| v as i64).sum();
             serde_json::json!({ "$pncounter": true, "$value": pos_sum - neg_sum })
         }
+        _ => serde_json::Value::Null,
     }
 }
 
@@ -75,7 +75,7 @@ pub fn query_result_to_response(result: &QueryResult) -> QueryResponse {
     QueryResponse {
         columns: result.columns.clone(),
         rows: result
-            .rows
+            .rows()
             .iter()
             .map(|row| row.iter().map(value_to_json).collect())
             .collect(),
@@ -151,7 +151,7 @@ impl Stream for StreamingQueryBody {
                     .expect("column names are always serializable");
                 let prefix = format!(r#"{{"columns":{columns_json},"rows":["#);
 
-                this.phase = if this.result.rows.is_empty() {
+                this.phase = if this.result.rows().is_empty() {
                     JsonStreamPhase::Suffix
                 } else {
                     JsonStreamPhase::Rows {
@@ -167,10 +167,10 @@ impl Stream for StreamingQueryBody {
                 offset,
                 needs_comma,
             } => {
-                let end = (offset + this.batch_size).min(this.result.rows.len());
+                let end = (offset + this.batch_size).min(this.result.rows().len());
                 let mut buf = String::new();
 
-                for (i, row) in this.result.rows[offset..end].iter().enumerate() {
+                for (i, row) in this.result.rows()[offset..end].iter().enumerate() {
                     if needs_comma || i > 0 {
                         buf.push(',');
                     }
@@ -181,7 +181,7 @@ impl Stream for StreamingQueryBody {
                     );
                 }
 
-                this.phase = if end >= this.result.rows.len() {
+                this.phase = if end >= this.result.rows().len() {
                     JsonStreamPhase::Suffix
                 } else {
                     JsonStreamPhase::Rows {
@@ -314,15 +314,8 @@ mod tests {
 
     #[test]
     fn query_response_includes_gql_status_when_non_success() {
-        let result = QueryResult {
-            columns: vec!["x".to_string()],
-            column_types: vec![grafeo_common::types::LogicalType::Int64],
-            rows: vec![],
-            execution_time_ms: None,
-            rows_scanned: None,
-            status_message: None,
-            gql_status: grafeo_common::utils::GqlStatus::from_str("02000").unwrap(),
-        };
+        let mut result = QueryResult::from_rows(vec!["x".to_string()], vec![]);
+        result.gql_status = grafeo_common::utils::GqlStatus::from_str("02000").unwrap();
         let resp = query_result_to_response(&result);
         assert_eq!(resp.gql_status.as_deref(), Some("02000"));
     }
@@ -337,15 +330,11 @@ mod tests {
 
     #[test]
     fn query_result_to_response_basic() {
-        let result = QueryResult {
-            columns: vec!["name".to_string()],
-            column_types: vec![grafeo_common::types::LogicalType::String],
-            rows: vec![vec![Value::String("Alice".into())]],
-            execution_time_ms: Some(1.5),
-            rows_scanned: Some(10),
-            status_message: None,
-            gql_status: grafeo_common::utils::GqlStatus::SUCCESS,
-        };
+        let result = QueryResult::from_rows(
+            vec!["name".to_string()],
+            vec![vec![Value::String("Alice".into())]],
+        )
+        .with_metrics(1.5, 10);
         let resp = query_result_to_response(&result);
         assert_eq!(resp.columns, vec!["name"]);
         assert_eq!(resp.rows.len(), 1);
@@ -362,20 +351,15 @@ mod tests {
     // --- Streaming tests ---
 
     use futures_util::StreamExt;
-    use grafeo_common::types::LogicalType;
 
     fn make_result(num_rows: usize) -> QueryResult {
-        QueryResult {
-            columns: vec!["x".to_string()],
-            column_types: vec![LogicalType::Int64],
-            rows: (0..num_rows)
+        QueryResult::from_rows(
+            vec!["x".to_string()],
+            (0..num_rows)
                 .map(|i| vec![Value::Int64(i as i64)])
                 .collect(),
-            execution_time_ms: Some(1.0),
-            rows_scanned: Some(num_rows as u64),
-            status_message: None,
-            gql_status: grafeo_common::utils::GqlStatus::SUCCESS,
-        }
+        )
+        .with_metrics(1.0, num_rows as u64)
     }
 
     /// Collects all chunks from a `StreamingQueryBody` into a single string.

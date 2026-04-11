@@ -38,12 +38,15 @@ subtle = { version = "2", optional = true }
 utoipa = { version = "5", optional = true }
 
 [features]
-default = ["gql", "storage", "algos"]
+default = ["lpg", "gql", "storage", "algos"]
+
+# Engine: data models
+lpg = ["grafeo-engine/lpg"]
 
 # Query languages (forwarded to grafeo-engine)
 gql = ["grafeo-engine/gql"]
 cypher = ["grafeo-engine/cypher"]
-sparql = ["grafeo-engine/sparql", "grafeo-engine/regex", "rdf"]
+sparql = ["grafeo-engine/sparql", "grafeo-engine/regex", "triple-store"]
 gremlin = ["grafeo-engine/gremlin"]
 graphql = ["grafeo-engine/graphql"]
 sql-pgq = ["grafeo-engine/sql-pgq"]
@@ -88,7 +91,8 @@ metrics = ["grafeo-engine/metrics"]
 tracing = ["grafeo-engine/tracing"]
 
 # Engine: data models
-rdf = ["grafeo-engine/rdf"]
+triple-store = ["grafeo-engine/triple-store"]
+rdf = ["triple-store"]  # deprecated alias
 
 # Schema loading
 owl-schema = ["dep:sophia_turtle", "dep:sophia_api", "dep:sophia_inmem"]

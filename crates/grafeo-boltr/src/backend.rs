@@ -195,7 +195,7 @@ impl BoltBackend for GrafeoBackend {
 
         let columns = result.columns.clone();
         let records: Vec<BoltRecord> = result
-            .rows
+            .rows()
             .iter()
             .map(|row| BoltRecord {
                 values: row.iter().map(grafeo_to_bolt).collect(),
