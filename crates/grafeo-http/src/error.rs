@@ -204,6 +204,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn forbidden_maps_to_403() {
+        let (status, body) =
+            parse_response(ApiError::forbidden("not allowed for this database")).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body["error"], "forbidden");
+        assert_eq!(body["detail"], "not allowed for this database");
+    }
+
+    #[tokio::test]
     async fn read_only_maps_to_403() {
         use grafeo_service::error::ServiceError;
         let (status, body) = parse_response(ApiError::from(ServiceError::ReadOnly)).await;

@@ -429,4 +429,174 @@ mod tests {
     fn ct_eq_one_empty() {
         assert!(!ct_eq(b"", b"a"));
     }
+
+    // -----------------------------------------------------------------------
+    // role_serde — deserialization of invalid role
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn role_serde_invalid_role_string() {
+        let json = r#"{"role":"superuser","databases":[]}"#;
+        let result: Result<TokenScope, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // TokenScope default
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn token_scope_default_is_admin_all_dbs() {
+        let scope = TokenScope::default();
+        assert_eq!(scope.role, Role::Admin);
+        assert!(scope.databases.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // TokenInfo::identity for different roles
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn token_info_identity_admin() {
+        let info = TokenInfo {
+            id: "tok-2".to_string(),
+            name: "admin-svc".to_string(),
+            scope: TokenScope {
+                role: Role::Admin,
+                databases: vec![],
+            },
+        };
+        let id = info.identity();
+        assert_eq!(id.user_id(), "admin-svc");
+        assert!(id.can_admin());
+        assert!(id.can_write());
+        assert!(id.can_read());
+    }
+
+    #[test]
+    fn token_info_identity_read_write() {
+        let info = TokenInfo {
+            id: "tok-3".to_string(),
+            name: "rw-svc".to_string(),
+            scope: TokenScope {
+                role: Role::ReadWrite,
+                databases: vec![],
+            },
+        };
+        let id = info.identity();
+        assert!(id.can_write());
+        assert!(id.can_read());
+        assert!(!id.can_admin());
+    }
+
+    // -----------------------------------------------------------------------
+    // AuthProvider::with_token_store
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn with_token_store_creates_provider_even_without_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::token_store::TokenStore::load(dir.path().join("tokens.json")).unwrap();
+        let store_arc = std::sync::Arc::new(store);
+        let provider = AuthProvider::with_token_store(None, None, None, store_arc);
+        assert!(provider.is_some());
+        let p = provider.unwrap();
+        assert!(p.is_enabled());
+        assert!(p.token_store().is_some());
+    }
+
+    #[test]
+    fn with_token_store_and_legacy_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::token_store::TokenStore::load(dir.path().join("tokens.json")).unwrap();
+        let store_arc = std::sync::Arc::new(store);
+        let provider =
+            AuthProvider::with_token_store(Some("tok".into()), None, None, store_arc).unwrap();
+        assert!(provider.is_enabled());
+        // Legacy token should still work
+        assert!(provider.check_bearer("tok").is_some());
+    }
+
+    // -----------------------------------------------------------------------
+    // check_bearer — store lookup
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn check_bearer_looks_up_token_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::token_store::TokenStore::load(dir.path().join("tokens.json")).unwrap();
+
+        // Insert a token record into the store.
+        let plaintext = "managed-api-key-123";
+        let hash = crate::token_service::hash_token(plaintext);
+        store
+            .insert(TokenRecord {
+                id: "tok-managed".to_string(),
+                name: "my-key".to_string(),
+                token_hash: hash,
+                scope: TokenScope {
+                    role: Role::ReadOnly,
+                    databases: vec!["mydb".to_string()],
+                },
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+            })
+            .unwrap();
+
+        let store_arc = std::sync::Arc::new(store);
+        let provider =
+            AuthProvider::with_token_store(Some("legacy-tok".into()), None, None, store_arc)
+                .unwrap();
+
+        // Legacy token returns admin scope.
+        let legacy = provider.check_bearer("legacy-tok").unwrap();
+        assert_eq!(legacy.scope.role, Role::Admin);
+
+        // Managed token returns its own scope.
+        let managed = provider.check_bearer(plaintext).unwrap();
+        assert_eq!(managed.id, "tok-managed");
+        assert_eq!(managed.name, "my-key");
+        assert_eq!(managed.scope.role, Role::ReadOnly);
+        assert_eq!(managed.scope.databases, vec!["mydb".to_string()]);
+
+        // Unknown token returns None.
+        assert!(provider.check_bearer("unknown").is_none());
+    }
+
+    #[test]
+    fn check_bearer_store_only_no_legacy() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::token_store::TokenStore::load(dir.path().join("tokens.json")).unwrap();
+
+        let plaintext = "store-only-key";
+        let hash = crate::token_service::hash_token(plaintext);
+        store
+            .insert(TokenRecord {
+                id: "tok-store".to_string(),
+                name: "store-key".to_string(),
+                token_hash: hash,
+                scope: TokenScope::default(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+            })
+            .unwrap();
+
+        let store_arc = std::sync::Arc::new(store);
+        let provider = AuthProvider::with_token_store(None, None, None, store_arc).unwrap();
+
+        // No legacy token, so only store lookup works.
+        let info = provider.check_bearer(plaintext).unwrap();
+        assert_eq!(info.id, "tok-store");
+
+        // Random token returns None.
+        assert!(provider.check_bearer("random").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // token_store accessor
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn token_store_returns_none_without_store() {
+        let provider = AuthProvider::new(Some("tok".into()), None, None).unwrap();
+        assert!(provider.token_store().is_none());
+    }
 }

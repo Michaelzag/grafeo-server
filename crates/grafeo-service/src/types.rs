@@ -593,3 +593,54 @@ pub struct ImportResponse {
     /// Number of edges created.
     pub edges_created: usize,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // TokenScopeRequest::to_role
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn to_role_admin() {
+        let req = TokenScopeRequest {
+            role: "admin".to_string(),
+            databases: vec![],
+        };
+        assert_eq!(req.to_role().unwrap(), grafeo_engine::auth::Role::Admin);
+    }
+
+    #[test]
+    fn to_role_read_write() {
+        let req = TokenScopeRequest {
+            role: "read-write".to_string(),
+            databases: vec![],
+        };
+        assert_eq!(req.to_role().unwrap(), grafeo_engine::auth::Role::ReadWrite);
+    }
+
+    #[test]
+    fn to_role_read_only() {
+        let req = TokenScopeRequest {
+            role: "read-only".to_string(),
+            databases: vec![],
+        };
+        assert_eq!(req.to_role().unwrap(), grafeo_engine::auth::Role::ReadOnly);
+    }
+
+    #[test]
+    fn to_role_invalid() {
+        let req = TokenScopeRequest {
+            role: "superuser".to_string(),
+            databases: vec![],
+        };
+        assert!(req.to_role().is_err());
+    }
+
+    #[test]
+    fn to_role_default() {
+        let req = TokenScopeRequest::default();
+        assert_eq!(req.to_role().unwrap(), grafeo_engine::auth::Role::Admin);
+    }
+}

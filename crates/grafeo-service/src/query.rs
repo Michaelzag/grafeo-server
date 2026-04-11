@@ -917,6 +917,34 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // dispatch — permission denied -> Forbidden mapping
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn execute_write_with_read_only_identity_returns_forbidden() {
+        let s = state();
+        // Use a read-only identity to attempt a write operation.
+        let identity = Identity::new("readonly-user", [Role::ReadOnly]);
+        let err = QueryService::execute(
+            s.databases(),
+            s.metrics(),
+            "default",
+            "CREATE (n:Test {val: 1})",
+            None,
+            None,
+            None,
+            false,
+            Some(identity),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, ServiceError::Forbidden(_)),
+            "expected Forbidden, got: {err:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // run_with_timeout
     // -----------------------------------------------------------------------
 
