@@ -35,6 +35,10 @@ pub async fn serve(
     addr: SocketAddr,
     options: BoltrOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Extract the pending auth map before the builder consumes the backend.
+    #[cfg(feature = "auth")]
+    let backend_pending = backend.pending.clone();
+
     let mut builder = boltr::server::BoltServer::builder(backend);
 
     if let Some(timeout) = options.idle_timeout {
@@ -46,7 +50,8 @@ pub async fn serve(
 
     #[cfg(feature = "auth")]
     if let Some(provider) = options.auth_provider {
-        builder = builder.auth(auth::BoltrAuthValidator::new(provider));
+        let pending = backend_pending.clone();
+        builder = builder.auth(auth::BoltrAuthValidator::new(provider, pending));
     }
 
     #[cfg(feature = "tls")]

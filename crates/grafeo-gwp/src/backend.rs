@@ -36,7 +36,14 @@ struct GrafeoSession {
     database: String,
     /// Query language override (e.g. "cypher"). When `None`, defaults to GQL.
     language: Option<String>,
+    /// Identity from authentication, used when creating new sessions on database switch.
+    #[cfg(feature = "auth")]
+    identity: Option<grafeo_engine::auth::Identity>,
 }
+
+/// Shared map for passing `TokenInfo` from the auth validator to the backend.
+#[cfg(feature = "auth")]
+pub(crate) type PendingAuth = std::sync::Arc<DashMap<String, grafeo_service::auth::TokenInfo>>;
 
 /// GQL Wire Protocol backend for Grafeo.
 ///
@@ -47,6 +54,8 @@ struct GrafeoSession {
 pub struct GrafeoBackend {
     state: ServiceState,
     sessions: DashMap<String, Arc<Mutex<GrafeoSession>>>,
+    #[cfg(feature = "auth")]
+    pub(crate) pending: PendingAuth,
 }
 
 impl GrafeoBackend {
@@ -55,6 +64,21 @@ impl GrafeoBackend {
         Self {
             state,
             sessions: DashMap::new(),
+            #[cfg(feature = "auth")]
+            pending: std::sync::Arc::new(DashMap::new()),
+        }
+    }
+
+    /// Creates a new backend with a shared `PendingAuth` map.
+    ///
+    /// The same map must be passed to the `GwpAuthValidator` so that
+    /// token identity flows from authentication to session creation.
+    #[cfg(feature = "auth")]
+    pub fn with_pending_auth(state: ServiceState, pending: PendingAuth) -> Self {
+        Self {
+            state,
+            sessions: DashMap::new(),
+            pending,
         }
     }
 
@@ -98,16 +122,35 @@ impl GrafeoBackend {
 
 #[tonic::async_trait]
 impl GqlBackend for GrafeoBackend {
-    async fn create_session(&self, _config: &SessionConfig) -> Result<SessionHandle, GqlError> {
+    async fn create_session(&self, config: &SessionConfig) -> Result<SessionHandle, GqlError> {
         let entry = self
             .state
             .databases()
             .get("default")
             .ok_or_else(|| GqlError::Session("default database not found".to_owned()))?;
 
+        // Resolve identity from auth_info principal (nonce -> TokenInfo -> Identity).
+        #[cfg(feature = "auth")]
+        let identity: Option<grafeo_engine::auth::Identity> = config
+            .auth_info
+            .as_ref()
+            .and_then(|info| self.pending.remove(&info.principal))
+            .map(|(_, token_info)| token_info.identity());
+
+        #[cfg(not(feature = "auth"))]
+        let _ = config;
+
         let ro = self.query_read_only();
+
+        #[cfg(feature = "auth")]
+        let identity_clone = identity.clone();
+
         let engine_session = tokio::task::spawn_blocking(move || {
             let db = entry.db();
+            #[cfg(feature = "auth")]
+            if let Some(id) = identity_clone {
+                return db.session_with_identity(id);
+            }
             if ro {
                 db.session_with_role(grafeo_engine::auth::Role::ReadOnly)
             } else {
@@ -124,6 +167,8 @@ impl GqlBackend for GrafeoBackend {
                 engine_session,
                 database: "default".to_owned(),
                 language: None,
+                #[cfg(feature = "auth")]
+                identity,
             })),
         );
 
@@ -151,8 +196,21 @@ impl GqlBackend for GrafeoBackend {
                     .map_err(|e| GqlError::Session(e.to_string()))?;
 
                 let ro = self.query_read_only();
+
+                // Reuse the stored identity when switching databases.
+                #[cfg(feature = "auth")]
+                let identity = {
+                    let session_arc = self.get_session(session)?;
+                    let s = session_arc.lock();
+                    s.identity.clone()
+                };
+
                 let engine_session = tokio::task::spawn_blocking(move || {
                     let db = entry.db();
+                    #[cfg(feature = "auth")]
+                    if let Some(id) = identity {
+                        return db.session_with_identity(id);
+                    }
                     if ro {
                         db.session_with_role(grafeo_engine::auth::Role::ReadOnly)
                     } else {
@@ -210,8 +268,20 @@ impl GqlBackend for GrafeoBackend {
             .ok_or_else(|| GqlError::Session("default database not found".to_owned()))?;
 
         let ro = self.query_read_only();
+
+        // Preserve identity across reset.
+        #[cfg(feature = "auth")]
+        let identity = {
+            let s = session_arc.lock();
+            s.identity.clone()
+        };
+
         let engine_session = tokio::task::spawn_blocking(move || {
             let db = entry.db();
+            #[cfg(feature = "auth")]
+            if let Some(id) = identity {
+                return db.session_with_identity(id);
+            }
             if ro {
                 db.session_with_role(grafeo_engine::auth::Role::ReadOnly)
             } else {

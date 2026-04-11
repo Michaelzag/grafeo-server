@@ -258,6 +258,35 @@ impl ServiceState {
         }
     }
 
+    /// Creates an in-memory state with a pre-built `AuthProvider` (for tests).
+    #[cfg(feature = "auth")]
+    pub fn new_in_memory_with_auth_provider(
+        session_ttl: u64,
+        provider: auth::AuthProvider,
+    ) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                databases: DatabaseManager::new(None, false),
+                sessions: SessionRegistry::new(),
+                metrics: Metrics::new(),
+                rate_limiter: RateLimiter::new(0, Duration::from_secs(60)),
+                session_ttl,
+                query_timeout: Duration::from_secs(30),
+                start_time: Instant::now(),
+                read_only: false,
+                auth: Some(provider),
+                #[cfg(feature = "push-changefeed")]
+                change_hub: changefeed::ChangeHub::new(),
+                #[cfg(feature = "replication")]
+                replication_mode: replication::ReplicationMode::Standalone,
+                #[cfg(feature = "replication")]
+                replication_state: Arc::new(replication::ReplicationState::new()),
+                backup_dir: None,
+                backup_retention: None,
+            }),
+        }
+    }
+
     /// Creates an in-memory state with read-only mode enabled (for tests).
     pub fn new_in_memory_read_only(session_ttl: u64) -> Self {
         Self {

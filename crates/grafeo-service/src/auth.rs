@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "auth")]
 use subtle::ConstantTimeEq;
 
-use grafeo_engine::auth::{Identity, Role};
+pub use grafeo_engine::auth::{Identity, Role};
 
 /// Map a [`Role`] to the wire-format string used in JSON storage and API responses.
 pub fn role_to_str(role: Role) -> &'static str {

@@ -343,9 +343,7 @@ dependencies = [
 
 [[package]]
 name = "boltr"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f26543694ef60712b1da09c347581fec86a27fe115f80f3fdf641a06fec559d8"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1516,9 +1514,7 @@ dependencies = [
 
 [[package]]
 name = "gwp"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "282dcd5c5e478b669948c811eb5d75ec317afbfe269d41027325dd0d4f7803ea"
+version = "0.2.0"
 dependencies = [
  "prost",
  "prost-build",

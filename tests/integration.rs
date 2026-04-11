@@ -5828,3 +5828,367 @@ async fn backup_multi_database_isolation() {
     assert_eq!(second_backups.len(), 1);
     assert_eq!(second_backups[0]["database"], "second");
 }
+
+// ---------------------------------------------------------------------------
+// GWP Identity-Aware Authentication
+// ---------------------------------------------------------------------------
+
+#[cfg(all(feature = "gwp", feature = "auth"))]
+async fn spawn_gwp_with_auth(token: &str) -> String {
+    let service = grafeo_service::ServiceState::new_in_memory_with_auth(300, token.to_string());
+    let gwp_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gwp_addr: SocketAddr = gwp_listener.local_addr().unwrap();
+    drop(gwp_listener);
+
+    let auth_provider = service.auth().cloned();
+    let backend = grafeo_gwp::GrafeoBackend::new(service);
+    let options = grafeo_gwp::GwpOptions {
+        auth_provider,
+        ..Default::default()
+    };
+    tokio::spawn(async move {
+        grafeo_gwp::serve(backend, gwp_addr, options).await.unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    format!("http://{gwp_addr}")
+}
+
+#[cfg(all(feature = "gwp", feature = "auth"))]
+#[tokio::test]
+async fn gwp_auth_bearer_token_allows_query() {
+    let gwp_endpoint = spawn_gwp_with_auth("test-gwp-token").await;
+
+    let channel = tonic::transport::Channel::from_shared(gwp_endpoint)
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let mut session_client =
+        gwp::proto::session_service_client::SessionServiceClient::new(channel.clone());
+    let mut gql_client = gwp::proto::gql_service_client::GqlServiceClient::new(channel);
+
+    // Handshake with valid bearer token
+    let resp = session_client
+        .handshake(gwp::proto::HandshakeRequest {
+            protocol_version: 1,
+            credentials: Some(gwp::proto::AuthCredentials {
+                method: Some(gwp::proto::auth_credentials::Method::BearerToken(
+                    "test-gwp-token".to_string(),
+                )),
+            }),
+            client_info: std::collections::HashMap::new(),
+        })
+        .await
+        .expect("handshake with valid token should succeed");
+
+    let session_id = resp.into_inner().session_id;
+    assert!(!session_id.is_empty());
+
+    // Execute a query (admin token can write)
+    let result = gql_client
+        .execute(gwp::proto::ExecuteRequest {
+            session_id: session_id.clone(),
+            statement: "CREATE (:GwpAuthTest {val: 42})".to_string(),
+            parameters: std::collections::HashMap::new(),
+            transaction_id: None,
+        })
+        .await;
+    assert!(result.is_ok(), "admin token should allow writes");
+
+    // Close session
+    session_client
+        .close(gwp::proto::CloseRequest {
+            session_id: session_id.clone(),
+        })
+        .await
+        .unwrap();
+}
+
+#[cfg(all(feature = "gwp", feature = "auth"))]
+#[tokio::test]
+async fn gwp_auth_invalid_token_rejected() {
+    let gwp_endpoint = spawn_gwp_with_auth("test-gwp-token").await;
+
+    let channel = tonic::transport::Channel::from_shared(gwp_endpoint)
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let mut session_client = gwp::proto::session_service_client::SessionServiceClient::new(channel);
+
+    // Handshake with invalid bearer token
+    let result = session_client
+        .handshake(gwp::proto::HandshakeRequest {
+            protocol_version: 1,
+            credentials: Some(gwp::proto::AuthCredentials {
+                method: Some(gwp::proto::auth_credentials::Method::BearerToken(
+                    "wrong-token".to_string(),
+                )),
+            }),
+            client_info: std::collections::HashMap::new(),
+        })
+        .await;
+
+    assert!(result.is_err(), "invalid token should be rejected");
+}
+
+#[cfg(all(feature = "gwp", feature = "auth"))]
+#[tokio::test]
+async fn gwp_auth_read_only_token_cannot_write() {
+    use grafeo_service::auth::{TokenRecord, TokenScope};
+    use grafeo_service::token_service::hash_token;
+    use grafeo_service::token_store::TokenStore;
+
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let store_path = tmp_dir.path().join("tokens.json");
+    let store = std::sync::Arc::new(TokenStore::load(&store_path).unwrap());
+
+    // Insert a read-only token
+    let ro_token = "read-only-gwp-token";
+    store
+        .insert(TokenRecord {
+            id: "tok-ro".to_string(),
+            name: "ro-client".to_string(),
+            token_hash: hash_token(ro_token),
+            scope: TokenScope {
+                role: grafeo_service::auth::Role::ReadOnly,
+                databases: vec![],
+            },
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+        })
+        .unwrap();
+
+    // Create service with token store
+    let provider = grafeo_service::auth::AuthProvider::with_token_store(
+        Some("admin-token".to_string()),
+        None,
+        None,
+        store,
+    )
+    .unwrap();
+
+    let service = grafeo_service::ServiceState::new_in_memory_with_auth_provider(300, provider);
+
+    let gwp_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gwp_addr: SocketAddr = gwp_listener.local_addr().unwrap();
+    drop(gwp_listener);
+
+    let auth_provider = service.auth().cloned();
+    let backend = grafeo_gwp::GrafeoBackend::new(service);
+    let options = grafeo_gwp::GwpOptions {
+        auth_provider,
+        ..Default::default()
+    };
+    tokio::spawn(async move {
+        grafeo_gwp::serve(backend, gwp_addr, options).await.unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let gwp_endpoint = format!("http://{gwp_addr}");
+    let channel = tonic::transport::Channel::from_shared(gwp_endpoint)
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let mut session_client =
+        gwp::proto::session_service_client::SessionServiceClient::new(channel.clone());
+    let mut gql_client = gwp::proto::gql_service_client::GqlServiceClient::new(channel);
+
+    // Handshake with read-only token
+    let resp = session_client
+        .handshake(gwp::proto::HandshakeRequest {
+            protocol_version: 1,
+            credentials: Some(gwp::proto::AuthCredentials {
+                method: Some(gwp::proto::auth_credentials::Method::BearerToken(
+                    ro_token.to_string(),
+                )),
+            }),
+            client_info: std::collections::HashMap::new(),
+        })
+        .await
+        .expect("handshake with read-only token should succeed");
+
+    let session_id = resp.into_inner().session_id;
+
+    // Write should fail (read-only identity).
+    // GWP wraps errors in the summary frame, so we consume the stream.
+    let mut stream = gql_client
+        .execute(gwp::proto::ExecuteRequest {
+            session_id: session_id.clone(),
+            statement: "CREATE (:Forbidden {val: 1})".to_string(),
+            parameters: std::collections::HashMap::new(),
+            transaction_id: None,
+        })
+        .await
+        .expect("gRPC call should succeed, error is in stream")
+        .into_inner();
+
+    use futures_util::StreamExt;
+    let mut found_error = false;
+    while let Some(msg) = stream.next().await {
+        if let Ok(resp) = msg {
+            if let Some(gwp::proto::execute_response::Frame::Summary(summary)) = resp.frame {
+                if let Some(status) = summary.status {
+                    // A non-success GQLSTATUS indicates an error.
+                    if status.code != "00000" {
+                        found_error = true;
+                    }
+                }
+            }
+        }
+    }
+    assert!(found_error, "read-only token should not allow writes");
+}
+
+// ---------------------------------------------------------------------------
+// BoltR Identity-Aware Authentication
+// ---------------------------------------------------------------------------
+
+#[cfg(all(feature = "bolt", feature = "auth"))]
+async fn spawn_bolt_with_auth(token: &str) -> SocketAddr {
+    let service = grafeo_service::ServiceState::new_in_memory_with_auth(300, token.to_string());
+    let bolt_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let bolt_addr: SocketAddr = bolt_listener.local_addr().unwrap();
+    drop(bolt_listener);
+
+    let auth_provider = service.auth().cloned();
+    let backend = grafeo_boltr::GrafeoBackend::new(service).with_advertise_addr(bolt_addr);
+    let options = grafeo_boltr::BoltrOptions {
+        auth_provider,
+        ..Default::default()
+    };
+    tokio::spawn(async move {
+        grafeo_boltr::serve(backend, bolt_addr, options)
+            .await
+            .unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    bolt_addr
+}
+
+#[cfg(all(feature = "bolt", feature = "auth"))]
+#[tokio::test]
+async fn bolt_auth_bearer_token_allows_query() {
+    let bolt_addr = spawn_bolt_with_auth("test-bolt-token").await;
+
+    // Connect with bearer authentication
+    let mut conn = boltr::client::BoltConnection::connect(bolt_addr)
+        .await
+        .unwrap();
+    let extra = boltr::types::BoltDict::from([(
+        "user_agent".to_string(),
+        boltr::types::BoltValue::String("test-client".to_string()),
+    )]);
+    conn.hello(extra).await.unwrap();
+    conn.logon("bearer", None, Some("test-bolt-token"))
+        .await
+        .expect("bearer logon with valid token should succeed");
+
+    // Execute a write query (admin token)
+    let _meta = conn
+        .run(
+            "CREATE (:BoltAuthTest {val: 42})",
+            std::collections::HashMap::new(),
+            boltr::types::BoltDict::new(),
+        )
+        .await
+        .unwrap();
+    let _summary = conn.pull_all().await.unwrap();
+}
+
+#[cfg(all(feature = "bolt", feature = "auth"))]
+#[tokio::test]
+async fn bolt_auth_invalid_token_rejected() {
+    let bolt_addr = spawn_bolt_with_auth("test-bolt-token").await;
+
+    let mut conn = boltr::client::BoltConnection::connect(bolt_addr)
+        .await
+        .unwrap();
+    let extra = boltr::types::BoltDict::from([(
+        "user_agent".to_string(),
+        boltr::types::BoltValue::String("test-client".to_string()),
+    )]);
+    conn.hello(extra).await.unwrap();
+    let result = conn.logon("bearer", None, Some("wrong-token")).await;
+    assert!(result.is_err(), "invalid token should be rejected");
+}
+
+#[cfg(all(feature = "bolt", feature = "auth"))]
+#[tokio::test]
+async fn bolt_auth_read_only_token_cannot_write() {
+    use grafeo_service::auth::{TokenRecord, TokenScope};
+    use grafeo_service::token_service::hash_token;
+    use grafeo_service::token_store::TokenStore;
+
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let store_path = tmp_dir.path().join("tokens.json");
+    let store = std::sync::Arc::new(TokenStore::load(&store_path).unwrap());
+
+    // Insert a read-only token
+    let ro_token = "read-only-bolt-token";
+    store
+        .insert(TokenRecord {
+            id: "tok-ro".to_string(),
+            name: "ro-client".to_string(),
+            token_hash: hash_token(ro_token),
+            scope: TokenScope {
+                role: grafeo_service::auth::Role::ReadOnly,
+                databases: vec![],
+            },
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+        })
+        .unwrap();
+
+    // Create service with token store
+    let provider = grafeo_service::auth::AuthProvider::with_token_store(
+        Some("admin-token".to_string()),
+        None,
+        None,
+        store,
+    )
+    .unwrap();
+
+    let service = grafeo_service::ServiceState::new_in_memory_with_auth_provider(300, provider);
+
+    let bolt_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let bolt_addr: SocketAddr = bolt_listener.local_addr().unwrap();
+    drop(bolt_listener);
+
+    let auth_provider = service.auth().cloned();
+    let backend = grafeo_boltr::GrafeoBackend::new(service).with_advertise_addr(bolt_addr);
+    let options = grafeo_boltr::BoltrOptions {
+        auth_provider,
+        ..Default::default()
+    };
+    tokio::spawn(async move {
+        grafeo_boltr::serve(backend, bolt_addr, options)
+            .await
+            .unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Connect with read-only bearer token
+    let mut conn = boltr::client::BoltConnection::connect(bolt_addr)
+        .await
+        .unwrap();
+    let extra = boltr::types::BoltDict::from([(
+        "user_agent".to_string(),
+        boltr::types::BoltValue::String("test-client".to_string()),
+    )]);
+    conn.hello(extra).await.unwrap();
+    conn.logon("bearer", None, Some(ro_token))
+        .await
+        .expect("logon with read-only token should succeed");
+
+    // Write should fail (read-only identity)
+    let result = conn
+        .run(
+            "CREATE (:Forbidden {val: 1})",
+            std::collections::HashMap::new(),
+            boltr::types::BoltDict::new(),
+        )
+        .await;
+    assert!(result.is_err(), "read-only token should not allow writes");
+}

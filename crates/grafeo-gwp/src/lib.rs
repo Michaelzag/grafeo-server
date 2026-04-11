@@ -98,6 +98,10 @@ pub async fn serve(
     addr: SocketAddr,
     options: GwpOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Extract the pending auth map before the builder consumes the backend.
+    #[cfg(feature = "auth")]
+    let pending = backend.pending.clone();
+
     let mut builder = gwp::server::GqlServer::builder(backend);
 
     if let Some(timeout) = options.idle_timeout {
@@ -120,7 +124,7 @@ pub async fn serve(
 
     #[cfg(feature = "auth")]
     if let Some(provider) = options.auth_provider {
-        builder = builder.auth(auth::GwpAuthValidator::new(provider));
+        builder = builder.auth(auth::GwpAuthValidator::new(provider, pending));
     }
 
     if let Some(signal) = options.shutdown {
