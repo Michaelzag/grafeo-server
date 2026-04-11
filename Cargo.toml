@@ -18,9 +18,9 @@ license = "Apache-2.0"
 repository = "https://github.com/GrafeoDB/grafeo-server"
 
 [workspace.dependencies]
-# Engine (path deps for local development; switch to version = "..." for releases)
-grafeo-engine = { path = "../grafeo/crates/grafeo-engine", default-features = false }
-grafeo-common = { path = "../grafeo/crates/grafeo-common" }
+# Engine
+grafeo-engine = { version = "0.5.36", default-features = false }
+grafeo-common = { version = "0.5.36" }
 
 # Internal crates
 grafeo-service = { path = "crates/grafeo-service" }
@@ -31,8 +31,8 @@ grafeo-boltr = { path = "crates/grafeo-boltr" }
 grafeo-sync = { path = "crates/grafeo-sync" }
 
 # External protocol crates
-boltr = { path = "../boltr" }
-gwp = { path = "../gwp" }
+boltr = "0.2.0"
+gwp = "0.2.1"
 
 # Async
 tokio = { version = "1.51", features = ["full"] }
