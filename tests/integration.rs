@@ -5349,7 +5349,9 @@ async fn backup_download_not_found() {
     let client = Client::new();
 
     let resp = client
-        .get(format!("{base}/admin/default/backups/download/nonexistent.grafeo"))
+        .get(format!(
+            "{base}/admin/default/backups/download/nonexistent.grafeo"
+        ))
         .send()
         .await
         .unwrap();

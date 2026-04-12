@@ -7,8 +7,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use grafeo_engine::database::backup::{BackupKind, BackupSegment};
 use grafeo_engine::GrafeoDB;
+use grafeo_engine::database::backup::{BackupKind, BackupSegment};
 
 use crate::database::{DatabaseEntry, DatabaseManager};
 use crate::error::ServiceError;
@@ -196,7 +196,9 @@ impl BackupService {
         let (save_result, safety_file) = if use_chain_api {
             let dir = safety_dir.clone();
             let result = tokio::task::spawn_blocking(move || {
-                safety_db.backup_full(&dir).map(|seg| dir.join(&seg.filename))
+                safety_db
+                    .backup_full(&dir)
+                    .map(|seg| dir.join(&seg.filename))
             })
             .await;
             match result {
@@ -211,8 +213,7 @@ impl BackupService {
                 .as_millis();
             let safety_path = safety_dir.join(format!("safety_{timestamp}.grafeo"));
             let path_clone = safety_path.clone();
-            let result =
-                tokio::task::spawn_blocking(move || safety_db.save(&safety_path)).await;
+            let result = tokio::task::spawn_blocking(move || safety_db.save(&safety_path)).await;
             match result {
                 Ok(Ok(())) => (Ok(Ok(())), Some(path_clone)),
                 Ok(Err(e)) => (Ok(Err(e)), None),
@@ -272,8 +273,8 @@ impl BackupService {
         let backup_owned = backup_path.to_path_buf();
         let db_file_clone = db_file.clone();
         let open_result = tokio::task::spawn_blocking(move || -> Result<GrafeoDB, String> {
-            let backup_db = GrafeoDB::open(&backup_owned)
-                .map_err(|e| format!("failed to open backup: {e}"))?;
+            let backup_db =
+                GrafeoDB::open(&backup_owned).map_err(|e| format!("failed to open backup: {e}"))?;
             backup_db
                 .save(&db_file_clone)
                 .map_err(|e| format!("failed to save restored data: {e}"))?;
@@ -298,7 +299,8 @@ impl BackupService {
                     "Failed to restore, recovering from safety backup"
                 );
                 let recovered =
-                    Self::recover_from_safety(entry, &db_file, backup_dir, safety_file.as_deref()).await;
+                    Self::recover_from_safety(entry, &db_file, backup_dir, safety_file.as_deref())
+                        .await;
                 (
                     Err(ServiceError::Internal(format!(
                         "restore failed{}: {e}",
@@ -331,11 +333,7 @@ impl BackupService {
                 std::fs::read_dir(backup_dir)
                     .ok()?
                     .flatten()
-                    .filter(|e| {
-                        e.path()
-                            .extension()
-                            .is_some_and(|ext| ext == "grafeo")
-                    })
+                    .filter(|e| e.path().extension().is_some_and(|ext| ext == "grafeo"))
                     .max_by_key(|e| e.metadata().ok().and_then(|m| m.modified().ok()))
                     .map(|e| e.path())
             })
@@ -471,7 +469,6 @@ impl BackupService {
         Ok(entries)
     }
 
-
     /// Delete a backup file from a specific database's backup directory.
     pub fn delete_backup(
         db_name: &str,
@@ -535,12 +532,12 @@ impl BackupService {
 
             if live_full_indices.len() > keep {
                 let cutoff_idx = live_full_indices[live_full_indices.len() - keep];
-                let filenames_to_delete: std::collections::HashSet<String> =
-                    m.segments[..cutoff_idx]
-                        .iter()
-                        .filter(|s| dir.join(&s.filename).exists())
-                        .map(|s| s.filename.clone())
-                        .collect();
+                let filenames_to_delete: std::collections::HashSet<String> = m.segments
+                    [..cutoff_idx]
+                    .iter()
+                    .filter(|s| dir.join(&s.filename).exists())
+                    .map(|s| s.filename.clone())
+                    .collect();
 
                 for filename in &filenames_to_delete {
                     let path = dir.join(filename);
@@ -560,7 +557,9 @@ impl BackupService {
                     .filter_map(|e| {
                         let path = e.path();
                         let fname = path.file_name()?.to_str()?.to_string();
-                        if !fname.ends_with(".grafeo") || manifest_filenames.contains(fname.as_str()) {
+                        if !fname.ends_with(".grafeo")
+                            || manifest_filenames.contains(fname.as_str())
+                        {
                             return None;
                         }
                         let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
@@ -616,7 +615,6 @@ impl BackupService {
 
         Ok(deleted)
     }
-
 }
 
 /// Migrate legacy backup files from the root backup directory into per-database
@@ -721,10 +719,7 @@ mod tests {
 
     #[test]
     fn millis_to_iso_formats_correctly() {
-        assert_eq!(
-            millis_to_iso(1_705_282_245_123),
-            "2024-01-15T01:30:45.123Z"
-        );
+        assert_eq!(millis_to_iso(1_705_282_245_123), "2024-01-15T01:30:45.123Z");
     }
 
     #[test]
@@ -770,12 +765,20 @@ mod tests {
     #[tokio::test]
     async fn list_backups_empty() {
         let backup_dir = tempfile::tempdir().unwrap();
-        assert!(BackupService::list_backups(None, backup_dir.path()).unwrap().is_empty());
+        assert!(
+            BackupService::list_backups(None, backup_dir.path())
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
     async fn list_backups_nonexistent_dir() {
-        assert!(BackupService::list_backups(None, Path::new("/nonexistent")).unwrap().is_empty());
+        assert!(
+            BackupService::list_backups(None, Path::new("/nonexistent"))
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -789,13 +792,19 @@ mod tests {
             .await
             .unwrap();
         BackupService::delete_backup("default", &backup.filename, backup_dir.path()).unwrap();
-        assert!(BackupService::list_backups(Some("default"), backup_dir.path()).unwrap().is_empty());
+        assert!(
+            BackupService::list_backups(Some("default"), backup_dir.path())
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
     async fn delete_backup_path_traversal() {
         let backup_dir = tempfile::tempdir().unwrap();
-        assert!(BackupService::delete_backup("default", "../etc/passwd", backup_dir.path()).is_err());
+        assert!(
+            BackupService::delete_backup("default", "../etc/passwd", backup_dir.path()).is_err()
+        );
     }
 
     #[tokio::test]
@@ -815,7 +824,11 @@ mod tests {
         let mgr =
             crate::database::DatabaseManager::new(Some(data_dir.path().to_str().unwrap()), false);
 
-        assert!(BackupService::backup_database(&mgr, "default", &nested).await.is_ok());
+        assert!(
+            BackupService::backup_database(&mgr, "default", &nested)
+                .await
+                .is_ok()
+        );
         assert!(nested.join("default").exists());
     }
 
@@ -827,8 +840,12 @@ mod tests {
         std::fs::write(&dummy, b"fake").unwrap();
 
         let result = BackupService::restore_database(
-            state.databases(), "default", &dummy, backup_dir.path(),
-        ).await;
+            state.databases(),
+            "default",
+            &dummy,
+            backup_dir.path(),
+        )
+        .await;
         assert!(result.is_err());
     }
 
@@ -841,7 +858,11 @@ mod tests {
 
         {
             let entry = mgr.get("default").unwrap();
-            entry.db().session().execute("INSERT (:Person {name: 'Alice'})").unwrap();
+            entry
+                .db()
+                .session()
+                .execute("INSERT (:Person {name: 'Alice'})")
+                .unwrap();
             assert_eq!(entry.db().node_count(), 1);
         }
 
@@ -851,14 +872,20 @@ mod tests {
 
         {
             let entry = mgr.get("default").unwrap();
-            entry.db().session().execute("INSERT (:Person {name: 'Bob'})").unwrap();
+            entry
+                .db()
+                .session()
+                .execute("INSERT (:Person {name: 'Bob'})")
+                .unwrap();
             assert_eq!(entry.db().node_count(), 2);
         }
 
-        let file_path = db_backup_dir(backup_dir.path(), "default").unwrap().join(&backup.filename);
-        BackupService::restore_database(
-            &mgr, "default", &file_path, backup_dir.path(),
-        ).await.unwrap();
+        let file_path = db_backup_dir(backup_dir.path(), "default")
+            .unwrap()
+            .join(&backup.filename);
+        BackupService::restore_database(&mgr, "default", &file_path, backup_dir.path())
+            .await
+            .unwrap();
 
         assert_eq!(mgr.get("default").unwrap().db().node_count(), 1);
     }
@@ -893,8 +920,12 @@ mod tests {
         };
         mgr.create(&req).unwrap();
 
-        BackupService::backup_database(&mgr, "default", backup_dir.path()).await.unwrap();
-        BackupService::backup_database(&mgr, "other", backup_dir.path()).await.unwrap();
+        BackupService::backup_database(&mgr, "default", backup_dir.path())
+            .await
+            .unwrap();
+        BackupService::backup_database(&mgr, "other", backup_dir.path())
+            .await
+            .unwrap();
 
         let default_list = BackupService::list_backups(Some("default"), backup_dir.path()).unwrap();
         assert_eq!(default_list.len(), 1);
@@ -904,6 +935,11 @@ mod tests {
         assert_eq!(other_list.len(), 1);
         assert_eq!(other_list[0].database, "other");
 
-        assert_eq!(BackupService::list_backups(None, backup_dir.path()).unwrap().len(), 2);
+        assert_eq!(
+            BackupService::list_backups(None, backup_dir.path())
+                .unwrap()
+                .len(),
+            2
+        );
     }
 }

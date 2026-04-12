@@ -286,8 +286,7 @@ impl DatabaseManager {
                     GrafeoDB::open_read_only(db_path.to_str().unwrap())
                         .expect("failed to create default db")
                 } else {
-                    GrafeoDB::open(db_path.to_str().unwrap())
-                        .expect("failed to create default db")
+                    GrafeoDB::open(db_path.to_str().unwrap()).expect("failed to create default db")
                 };
                 mgr.databases.insert(
                     "default".to_string(),
