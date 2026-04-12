@@ -29,12 +29,14 @@ fn accepts_arrow(headers: &HeaderMap) -> bool {
     };
     for part in accept.split(',') {
         let part = part.trim();
-        if !part.contains(ARROW_MIME) {
+        // Split "type/subtype;params" and compare media type exactly.
+        let mut segments = part.split(';');
+        let media_type = segments.next().unwrap_or("").trim();
+        if media_type != ARROW_MIME {
             continue;
         }
         // Check for an explicit q=0 (rejected).
-        let q = part
-            .split(';')
+        let q = segments
             .filter_map(|p| {
                 let p = p.trim();
                 p.strip_prefix("q=").or_else(|| p.strip_prefix("q ="))

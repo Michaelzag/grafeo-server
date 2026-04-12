@@ -407,13 +407,9 @@ struct ParsedBody {
 /// additional SPARQL statements when embedded in the query prologue.
 fn validate_turtle_directive(rest: &str, kind: &str) -> Result<(), ApiError> {
     // The directive body must not contain characters that could break out
-    // of the prologue: newlines, semicolons, or braces.
-    if rest.contains('\n')
-        || rest.contains('\r')
-        || rest.contains(';')
-        || rest.contains('{')
-        || rest.contains('}')
-    {
+    // of the prologue: newlines or braces. Semicolons are allowed because
+    // they can appear inside valid IRIs (e.g. path parameters).
+    if rest.contains('\n') || rest.contains('\r') || rest.contains('{') || rest.contains('}') {
         return Err(ApiError::bad_request(format!(
             "invalid @{kind} directive: contains disallowed characters"
         )));
@@ -518,6 +514,21 @@ fn build_insert_data(target: &GraphTarget, parsed: &ParsedBody) -> String {
     }
 }
 
+/// Returns `true` if the string looks like an absolute IRI (has a scheme
+/// followed by `:`).  Covers common schemes such as `http`, `https`, `urn`,
+/// `ftp`, `mailto`, `file`, `doi`, `geo`, etc.
+fn is_iri(s: &str) -> bool {
+    // An absolute IRI starts with a scheme: one or more ASCII letters,
+    // optionally followed by digits/`+`/`-`/`.`, then `:`.
+    match s.find(':') {
+        Some(pos) if pos > 0 => s[..pos].bytes().enumerate().all(|(i, b)| {
+            b.is_ascii_alphabetic()
+                || (i > 0 && (b.is_ascii_digit() || b == b'+' || b == b'-' || b == b'.'))
+        }),
+        _ => false,
+    }
+}
+
 /// Converts a Grafeo `Value` to an N-Triples term string.
 #[allow(clippy::match_same_arms)]
 pub(crate) fn value_to_nt_term(value: &grafeo_common::Value) -> String {
@@ -525,10 +536,7 @@ pub(crate) fn value_to_nt_term(value: &grafeo_common::Value) -> String {
     match value {
         Value::String(s) => {
             let s_str = s.to_string();
-            if s_str.starts_with("http://")
-                || s_str.starts_with("https://")
-                || s_str.starts_with("urn:")
-            {
+            if is_iri(&s_str) {
                 format!("<{s_str}>")
             } else if s_str.starts_with("_:") {
                 s_str
