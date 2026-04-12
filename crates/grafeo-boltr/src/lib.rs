@@ -1,4 +1,4 @@
-//! Grafeo BoltR — Bolt v5 wire protocol transport adapter.
+//! Grafeo BoltR: Bolt v5 wire protocol transport adapter.
 //!
 //! Implements the `BoltBackend` trait from the `boltr` crate, bridging
 //! Bolt sessions to grafeo-engine via `grafeo-service::ServiceState`.
@@ -35,6 +35,10 @@ pub async fn serve(
     addr: SocketAddr,
     options: BoltrOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Extract the pending auth map before the builder consumes the backend.
+    #[cfg(feature = "auth")]
+    let backend_pending = backend.pending.clone();
+
     let mut builder = boltr::server::BoltServer::builder(backend);
 
     if let Some(timeout) = options.idle_timeout {
@@ -44,9 +48,24 @@ pub async fn serve(
         builder = builder.max_sessions(limit);
     }
 
+    // Keep the reaper handle alive until serve() returns so it can be
+    // aborted when the runtime shuts down.
+    #[cfg(feature = "auth")]
+    let _reaper: Option<tokio::task::JoinHandle<()>>;
+
     #[cfg(feature = "auth")]
     if let Some(provider) = options.auth_provider {
-        builder = builder.auth(auth::BoltrAuthValidator::new(provider));
+        let pending = backend_pending.clone();
+        builder = builder.auth(auth::BoltrAuthValidator::new(provider, pending));
+
+        // Reap stale auth nonces from clients that never completed session creation.
+        _reaper = Some(grafeo_service::auth::spawn_pending_auth_reaper(
+            backend_pending,
+            Duration::from_secs(60),
+            Duration::from_secs(30),
+        ));
+    } else {
+        _reaper = None;
     }
 
     #[cfg(feature = "tls")]

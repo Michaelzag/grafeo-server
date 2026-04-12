@@ -4392,6 +4392,8 @@ fn sync_state() -> grafeo_server::AppState {
         auth_user: None,
         #[cfg(feature = "auth")]
         auth_password: None,
+        #[cfg(feature = "auth")]
+        token_store_path: None,
         #[cfg(feature = "replication")]
         replication_mode: grafeo_service::replication::ReplicationMode::Primary,
         backup_dir: None,
@@ -5156,12 +5158,13 @@ async fn bolt_route_returns_routing_table() {
 // Backup & Restore
 // ---------------------------------------------------------------------------
 
-/// Boots a server with backup configured, returning (base_url, backup_tempdir).
-/// The TempDir must be kept alive for the duration of the test.
-async fn spawn_server_with_backup() -> (String, TempDir) {
+/// Boots a server with persistent storage and backup configured.
+/// Returns (base_url, data_tempdir, backup_tempdir).
+async fn spawn_server_with_backup() -> (String, TempDir, TempDir) {
+    let data_dir = TempDir::new().unwrap();
     let backup_dir = TempDir::new().unwrap();
     let config = grafeo_service::ServiceConfig {
-        data_dir: None,
+        data_dir: Some(data_dir.path().to_str().unwrap().to_string()),
         read_only: false,
         session_ttl: 300,
         query_timeout: 30,
@@ -5173,6 +5176,8 @@ async fn spawn_server_with_backup() -> (String, TempDir) {
         auth_user: None,
         #[cfg(feature = "auth")]
         auth_password: None,
+        #[cfg(feature = "auth")]
+        token_store_path: None,
         #[cfg(feature = "replication")]
         replication_mode: grafeo_service::replication::ReplicationMode::Standalone,
         backup_dir: Some(backup_dir.path().to_str().unwrap().to_string()),
@@ -5185,7 +5190,7 @@ async fn spawn_server_with_backup() -> (String, TempDir) {
         grafeo_service::types::EnabledFeatures::default(),
     );
     let base = spawn_server_from_state(state).await;
-    (base, backup_dir)
+    (base, data_dir, backup_dir)
 }
 
 #[tokio::test]
@@ -5203,7 +5208,7 @@ async fn backup_requires_configuration() {
 
 #[tokio::test]
 async fn backup_create_and_list() {
-    let (base, _dir) = spawn_server_with_backup().await;
+    let (base, _data, _dir) = spawn_server_with_backup().await;
     let client = Client::new();
 
     // Create a backup
@@ -5234,7 +5239,7 @@ async fn backup_create_and_list() {
 
 #[tokio::test]
 async fn backup_list_all() {
-    let (base, _dir) = spawn_server_with_backup().await;
+    let (base, _data, _dir) = spawn_server_with_backup().await;
     let client = Client::new();
 
     client
@@ -5252,7 +5257,7 @@ async fn backup_list_all() {
 
 #[tokio::test]
 async fn backup_not_found_database() {
-    let (base, _dir) = spawn_server_with_backup().await;
+    let (base, _data, _dir) = spawn_server_with_backup().await;
     let client = Client::new();
 
     let resp = client
@@ -5265,7 +5270,7 @@ async fn backup_not_found_database() {
 
 #[tokio::test]
 async fn backup_delete() {
-    let (base, _dir) = spawn_server_with_backup().await;
+    let (base, _data, _dir) = spawn_server_with_backup().await;
     let client = Client::new();
 
     let resp = client
@@ -5277,7 +5282,7 @@ async fn backup_delete() {
     let filename = body["filename"].as_str().unwrap();
 
     let resp = client
-        .delete(format!("{base}/backups/{filename}"))
+        .delete(format!("{base}/admin/default/backups/{filename}"))
         .send()
         .await
         .unwrap();
@@ -5294,11 +5299,11 @@ async fn backup_delete() {
 
 #[tokio::test]
 async fn backup_delete_not_found() {
-    let (base, _dir) = spawn_server_with_backup().await;
+    let (base, _data, _dir) = spawn_server_with_backup().await;
     let client = Client::new();
 
     let resp = client
-        .delete(format!("{base}/backups/nonexistent.grafeo"))
+        .delete(format!("{base}/admin/default/backups/nonexistent.grafeo"))
         .send()
         .await
         .unwrap();
@@ -5307,7 +5312,7 @@ async fn backup_delete_not_found() {
 
 #[tokio::test]
 async fn backup_download() {
-    let (base, _dir) = spawn_server_with_backup().await;
+    let (base, _data, _dir) = spawn_server_with_backup().await;
     let client = Client::new();
 
     let resp = client
@@ -5320,7 +5325,7 @@ async fn backup_download() {
     let size = body["size_bytes"].as_u64().unwrap();
 
     let resp = client
-        .get(format!("{base}/backups/download/{filename}"))
+        .get(format!("{base}/admin/default/backups/download/{filename}"))
         .send()
         .await
         .unwrap();
@@ -5340,11 +5345,13 @@ async fn backup_download() {
 
 #[tokio::test]
 async fn backup_download_not_found() {
-    let (base, _dir) = spawn_server_with_backup().await;
+    let (base, _data, _dir) = spawn_server_with_backup().await;
     let client = Client::new();
 
     let resp = client
-        .get(format!("{base}/backups/download/nonexistent.grafeo"))
+        .get(format!(
+            "{base}/admin/default/backups/download/nonexistent.grafeo"
+        ))
         .send()
         .await
         .unwrap();
@@ -5367,10 +5374,23 @@ async fn restore_requires_backup_config() {
 
 #[tokio::test]
 async fn restore_in_memory_rejected() {
-    let (base, _dir) = spawn_server_with_backup().await;
+    let (base, _data, _dir) = spawn_server_with_backup().await;
     let client = Client::new();
 
-    // Create a backup first so the file exists
+    // Create an in-memory database
+    let resp = client
+        .post(format!("{base}/db"))
+        .json(&json!({
+            "name": "memdb",
+            "database_type": "Lpg",
+            "storage_mode": "InMemory"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Create a backup of the persistent default db so we have a file
     let resp = client
         .post(format!("{base}/admin/default/backup"))
         .send()
@@ -5379,9 +5399,9 @@ async fn restore_in_memory_rejected() {
     let body: Value = resp.json().await.unwrap();
     let filename = body["filename"].as_str().unwrap();
 
-    // Restore should fail because the default db is in-memory
+    // Restore to the in-memory db should fail
     let resp = client
-        .post(format!("{base}/admin/default/restore"))
+        .post(format!("{base}/admin/memdb/restore"))
         .json(&json!({ "backup": filename }))
         .send()
         .await
@@ -5407,6 +5427,8 @@ async fn spawn_server_persistent_backup() -> (String, TempDir, TempDir) {
         auth_user: None,
         #[cfg(feature = "auth")]
         auth_password: None,
+        #[cfg(feature = "auth")]
+        token_store_path: None,
         #[cfg(feature = "replication")]
         replication_mode: grafeo_service::replication::ReplicationMode::Standalone,
         backup_dir: Some(backup_dir.path().to_str().unwrap().to_string()),
@@ -5439,6 +5461,8 @@ async fn spawn_server_persistent_backup_with_retention(keep: usize) -> (String, 
         auth_user: None,
         #[cfg(feature = "auth")]
         auth_password: None,
+        #[cfg(feature = "auth")]
+        token_store_path: None,
         #[cfg(feature = "replication")]
         replication_mode: grafeo_service::replication::ReplicationMode::Standalone,
         backup_dir: Some(backup_dir.path().to_str().unwrap().to_string()),
@@ -5501,7 +5525,7 @@ async fn restore_data_rollback() {
         .await
         .unwrap();
     let filename = resp["filename"].as_str().unwrap().to_string();
-    assert_eq!(resp["node_count"], 10);
+    assert_eq!(resp["kind"], "full");
 
     // Add more nodes
     seed_nodes(&client, &base, "default", 5).await;
@@ -5602,7 +5626,7 @@ async fn backup_download_integrity() {
     let filename = resp["filename"].as_str().unwrap().to_string();
 
     let bytes = client
-        .get(format!("{base}/backups/download/{filename}"))
+        .get(format!("{base}/admin/default/backups/download/{filename}"))
         .send()
         .await
         .unwrap()
@@ -5612,7 +5636,9 @@ async fn backup_download_integrity() {
     assert!(!bytes.is_empty());
 
     // Write downloaded bytes as a new file in the backup dir
-    let copy_path = backup_dir.path().join("downloaded_copy.grafeo");
+    let db_backup = backup_dir.path().join("default");
+    std::fs::create_dir_all(&db_backup).unwrap();
+    let copy_path = db_backup.join("downloaded_copy.grafeo");
     std::fs::write(&copy_path, &bytes).unwrap();
 
     // Mutate
@@ -5638,7 +5664,9 @@ async fn restore_corrupt_backup_recovers() {
     seed_nodes(&client, &base, "default", 10).await;
 
     // Write a corrupt file
-    std::fs::write(backup_dir.path().join("corrupt.grafeo"), b"garbage").unwrap();
+    let db_backup = backup_dir.path().join("default");
+    std::fs::create_dir_all(&db_backup).unwrap();
+    std::fs::write(db_backup.join("corrupt.grafeo"), b"garbage").unwrap();
 
     let resp = client
         .post(format!("{base}/admin/default/restore"))
@@ -5819,4 +5847,1076 @@ async fn backup_multi_database_isolation() {
         .unwrap();
     assert_eq!(second_backups.len(), 1);
     assert_eq!(second_backups[0]["database"], "second");
+}
+
+// ---------------------------------------------------------------------------
+// GWP Identity-Aware Authentication
+// ---------------------------------------------------------------------------
+
+#[cfg(all(feature = "gwp", feature = "auth"))]
+async fn spawn_gwp_with_auth(token: &str) -> String {
+    let service = grafeo_service::ServiceState::new_in_memory_with_auth(300, token.to_string());
+    let gwp_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gwp_addr: SocketAddr = gwp_listener.local_addr().unwrap();
+    drop(gwp_listener);
+
+    let auth_provider = service.auth().cloned();
+    let backend = grafeo_gwp::GrafeoBackend::new(service);
+    let options = grafeo_gwp::GwpOptions {
+        auth_provider,
+        ..Default::default()
+    };
+    tokio::spawn(async move {
+        grafeo_gwp::serve(backend, gwp_addr, options).await.unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    format!("http://{gwp_addr}")
+}
+
+#[cfg(all(feature = "gwp", feature = "auth"))]
+#[tokio::test]
+async fn gwp_auth_bearer_token_allows_query() {
+    let gwp_endpoint = spawn_gwp_with_auth("test-gwp-token").await;
+
+    let channel = tonic::transport::Channel::from_shared(gwp_endpoint)
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let mut session_client =
+        gwp::proto::session_service_client::SessionServiceClient::new(channel.clone());
+    let mut gql_client = gwp::proto::gql_service_client::GqlServiceClient::new(channel);
+
+    // Handshake with valid bearer token
+    let resp = session_client
+        .handshake(gwp::proto::HandshakeRequest {
+            protocol_version: 1,
+            credentials: Some(gwp::proto::AuthCredentials {
+                method: Some(gwp::proto::auth_credentials::Method::BearerToken(
+                    "test-gwp-token".to_string(),
+                )),
+            }),
+            client_info: std::collections::HashMap::new(),
+        })
+        .await
+        .expect("handshake with valid token should succeed");
+
+    let session_id = resp.into_inner().session_id;
+    assert!(!session_id.is_empty());
+
+    // Execute a query (admin token can write)
+    let stream = gql_client
+        .execute(gwp::proto::ExecuteRequest {
+            session_id: session_id.clone(),
+            statement: "CREATE (:GwpAuthTest {val: 42})".to_string(),
+            parameters: std::collections::HashMap::new(),
+            transaction_id: None,
+        })
+        .await
+        .expect("gRPC call should succeed, error is in stream")
+        .into_inner();
+
+    use futures_util::StreamExt as _;
+    let mut stream = stream;
+    let mut found_success = false;
+    while let Some(msg) = stream.next().await {
+        if let Ok(resp) = msg
+            && let Some(gwp::proto::execute_response::Frame::Summary(summary)) = resp.frame
+            && let Some(status) = summary.status
+            && status.code == "00000"
+        {
+            found_success = true;
+        }
+    }
+    assert!(
+        found_success,
+        "admin token should allow writes and return success status"
+    );
+
+    // Close session
+    session_client
+        .close_session(gwp::proto::CloseSessionRequest {
+            session_id: session_id.clone(),
+        })
+        .await
+        .unwrap();
+}
+
+#[cfg(all(feature = "gwp", feature = "auth"))]
+#[tokio::test]
+async fn gwp_auth_invalid_token_rejected() {
+    let gwp_endpoint = spawn_gwp_with_auth("test-gwp-token").await;
+
+    let channel = tonic::transport::Channel::from_shared(gwp_endpoint)
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let mut session_client = gwp::proto::session_service_client::SessionServiceClient::new(channel);
+
+    // Handshake with invalid bearer token
+    let result = session_client
+        .handshake(gwp::proto::HandshakeRequest {
+            protocol_version: 1,
+            credentials: Some(gwp::proto::AuthCredentials {
+                method: Some(gwp::proto::auth_credentials::Method::BearerToken(
+                    "wrong-token".to_string(),
+                )),
+            }),
+            client_info: std::collections::HashMap::new(),
+        })
+        .await;
+
+    assert!(result.is_err(), "invalid token should be rejected");
+}
+
+#[cfg(all(feature = "gwp", feature = "auth"))]
+#[tokio::test]
+async fn gwp_auth_read_only_token_cannot_write() {
+    use grafeo_service::auth::{TokenRecord, TokenScope};
+    use grafeo_service::token_service::hash_token;
+    use grafeo_service::token_store::TokenStore;
+
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let store_path = tmp_dir.path().join("tokens.json");
+    let store = std::sync::Arc::new(TokenStore::load(&store_path).unwrap());
+
+    // Insert a read-only token
+    let ro_token = "read-only-gwp-token";
+    store
+        .insert(TokenRecord {
+            id: "tok-ro".to_string(),
+            name: "ro-client".to_string(),
+            token_hash: hash_token(ro_token),
+            scope: TokenScope {
+                role: grafeo_service::auth::Role::ReadOnly,
+                databases: vec![],
+            },
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+        })
+        .unwrap();
+
+    // Create service with token store
+    let provider = grafeo_service::auth::AuthProvider::with_token_store(
+        Some("admin-token".to_string()),
+        None,
+        None,
+        store,
+    )
+    .unwrap();
+
+    let service = grafeo_service::ServiceState::new_in_memory_with_auth_provider(300, provider);
+
+    let gwp_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gwp_addr: SocketAddr = gwp_listener.local_addr().unwrap();
+    drop(gwp_listener);
+
+    let auth_provider = service.auth().cloned();
+    let backend = grafeo_gwp::GrafeoBackend::new(service);
+    let options = grafeo_gwp::GwpOptions {
+        auth_provider,
+        ..Default::default()
+    };
+    tokio::spawn(async move {
+        grafeo_gwp::serve(backend, gwp_addr, options).await.unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let gwp_endpoint = format!("http://{gwp_addr}");
+    let channel = tonic::transport::Channel::from_shared(gwp_endpoint)
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let mut session_client =
+        gwp::proto::session_service_client::SessionServiceClient::new(channel.clone());
+    let mut gql_client = gwp::proto::gql_service_client::GqlServiceClient::new(channel);
+
+    // Handshake with read-only token
+    let resp = session_client
+        .handshake(gwp::proto::HandshakeRequest {
+            protocol_version: 1,
+            credentials: Some(gwp::proto::AuthCredentials {
+                method: Some(gwp::proto::auth_credentials::Method::BearerToken(
+                    ro_token.to_string(),
+                )),
+            }),
+            client_info: std::collections::HashMap::new(),
+        })
+        .await
+        .expect("handshake with read-only token should succeed");
+
+    let session_id = resp.into_inner().session_id;
+
+    // Write should fail (read-only identity).
+    // GWP wraps errors in the summary frame, so we consume the stream.
+    let mut stream = gql_client
+        .execute(gwp::proto::ExecuteRequest {
+            session_id: session_id.clone(),
+            statement: "CREATE (:Forbidden {val: 1})".to_string(),
+            parameters: std::collections::HashMap::new(),
+            transaction_id: None,
+        })
+        .await
+        .expect("gRPC call should succeed, error is in stream")
+        .into_inner();
+
+    use futures_util::StreamExt;
+    let mut found_error = false;
+    while let Some(msg) = stream.next().await {
+        if let Ok(resp) = msg
+            && let Some(gwp::proto::execute_response::Frame::Summary(summary)) = resp.frame
+            && let Some(status) = summary.status
+            && status.code != "00000"
+        {
+            // A non-success GQLSTATUS indicates an error.
+            found_error = true;
+        }
+    }
+    assert!(found_error, "read-only token should not allow writes");
+}
+
+// ---------------------------------------------------------------------------
+// BoltR Identity-Aware Authentication
+// ---------------------------------------------------------------------------
+
+#[cfg(all(feature = "bolt", feature = "auth"))]
+async fn spawn_bolt_with_auth(token: &str) -> SocketAddr {
+    let service = grafeo_service::ServiceState::new_in_memory_with_auth(300, token.to_string());
+    let bolt_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let bolt_addr: SocketAddr = bolt_listener.local_addr().unwrap();
+    drop(bolt_listener);
+
+    let auth_provider = service.auth().cloned();
+    let backend = grafeo_boltr::GrafeoBackend::new(service).with_advertise_addr(bolt_addr);
+    let options = grafeo_boltr::BoltrOptions {
+        auth_provider,
+        ..Default::default()
+    };
+    tokio::spawn(async move {
+        grafeo_boltr::serve(backend, bolt_addr, options)
+            .await
+            .unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    bolt_addr
+}
+
+#[cfg(all(feature = "bolt", feature = "auth"))]
+#[tokio::test]
+async fn bolt_auth_bearer_token_allows_query() {
+    let bolt_addr = spawn_bolt_with_auth("test-bolt-token").await;
+
+    // Connect with bearer authentication
+    let mut conn = boltr::client::BoltConnection::connect(bolt_addr)
+        .await
+        .unwrap();
+    let extra = boltr::types::BoltDict::from([(
+        "user_agent".to_string(),
+        boltr::types::BoltValue::String("test-client".to_string()),
+    )]);
+    conn.hello(extra).await.unwrap();
+    conn.logon("bearer", None, Some("test-bolt-token"))
+        .await
+        .expect("bearer logon with valid token should succeed");
+
+    // Execute a write query (admin token)
+    let _meta = conn
+        .run(
+            "CREATE (:BoltAuthTest {val: 42})",
+            std::collections::HashMap::new(),
+            boltr::types::BoltDict::new(),
+        )
+        .await
+        .unwrap();
+    let _summary = conn.pull_all().await.unwrap();
+}
+
+#[cfg(all(feature = "bolt", feature = "auth"))]
+#[tokio::test]
+async fn bolt_auth_invalid_token_rejected() {
+    let bolt_addr = spawn_bolt_with_auth("test-bolt-token").await;
+
+    let mut conn = boltr::client::BoltConnection::connect(bolt_addr)
+        .await
+        .unwrap();
+    let extra = boltr::types::BoltDict::from([(
+        "user_agent".to_string(),
+        boltr::types::BoltValue::String("test-client".to_string()),
+    )]);
+    conn.hello(extra).await.unwrap();
+    let result = conn.logon("bearer", None, Some("wrong-token")).await;
+    assert!(result.is_err(), "invalid token should be rejected");
+}
+
+#[cfg(all(feature = "bolt", feature = "auth"))]
+#[tokio::test]
+async fn bolt_auth_read_only_token_cannot_write() {
+    use grafeo_service::auth::{TokenRecord, TokenScope};
+    use grafeo_service::token_service::hash_token;
+    use grafeo_service::token_store::TokenStore;
+
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let store_path = tmp_dir.path().join("tokens.json");
+    let store = std::sync::Arc::new(TokenStore::load(&store_path).unwrap());
+
+    // Insert a read-only token
+    let ro_token = "read-only-bolt-token";
+    store
+        .insert(TokenRecord {
+            id: "tok-ro".to_string(),
+            name: "ro-client".to_string(),
+            token_hash: hash_token(ro_token),
+            scope: TokenScope {
+                role: grafeo_service::auth::Role::ReadOnly,
+                databases: vec![],
+            },
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+        })
+        .unwrap();
+
+    // Create service with token store
+    let provider = grafeo_service::auth::AuthProvider::with_token_store(
+        Some("admin-token".to_string()),
+        None,
+        None,
+        store,
+    )
+    .unwrap();
+
+    let service = grafeo_service::ServiceState::new_in_memory_with_auth_provider(300, provider);
+
+    let bolt_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let bolt_addr: SocketAddr = bolt_listener.local_addr().unwrap();
+    drop(bolt_listener);
+
+    let auth_provider = service.auth().cloned();
+    let backend = grafeo_boltr::GrafeoBackend::new(service).with_advertise_addr(bolt_addr);
+    let options = grafeo_boltr::BoltrOptions {
+        auth_provider,
+        ..Default::default()
+    };
+    tokio::spawn(async move {
+        grafeo_boltr::serve(backend, bolt_addr, options)
+            .await
+            .unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Connect with read-only bearer token
+    let mut conn = boltr::client::BoltConnection::connect(bolt_addr)
+        .await
+        .unwrap();
+    let extra = boltr::types::BoltDict::from([(
+        "user_agent".to_string(),
+        boltr::types::BoltValue::String("test-client".to_string()),
+    )]);
+    conn.hello(extra).await.unwrap();
+    conn.logon("bearer", None, Some(ro_token))
+        .await
+        .expect("logon with read-only token should succeed");
+
+    // Write should fail (read-only identity)
+    let result = conn
+        .run(
+            "CREATE (:Forbidden {val: 1})",
+            std::collections::HashMap::new(),
+            boltr::types::BoltDict::new(),
+        )
+        .await;
+    assert!(result.is_err(), "read-only token should not allow writes");
+}
+
+// ---------------------------------------------------------------------------
+// HTTP Auth: Scoped Tokens (database filtering, access checks, identity)
+// ---------------------------------------------------------------------------
+
+/// Helper: creates a server with a token store containing a legacy admin token
+/// and one or more managed scoped tokens. Returns (base_url, admin_token, Vec<(token_plaintext, token_id)>).
+#[cfg(feature = "auth")]
+async fn spawn_server_with_token_store(
+    admin_token: &str,
+    scoped_tokens: Vec<(&str, &str, grafeo_service::auth::TokenScope)>,
+) -> (String, String, Vec<(String, String)>) {
+    use grafeo_service::auth::TokenRecord;
+
+    let dir = tempfile::tempdir().unwrap();
+    let store =
+        grafeo_service::token_store::TokenStore::load(dir.path().join("tokens.json")).unwrap();
+
+    let mut token_infos = Vec::new();
+    for (plaintext, name, scope) in &scoped_tokens {
+        let hash = grafeo_service::token_service::hash_token(plaintext);
+        let id = format!("tok-{name}");
+        store
+            .insert(TokenRecord {
+                id: id.clone(),
+                name: name.to_string(),
+                token_hash: hash,
+                scope: scope.clone(),
+                created_at: "2026-01-01T00:00:00Z".to_string(),
+            })
+            .unwrap();
+        token_infos.push((plaintext.to_string(), id));
+    }
+
+    let store_arc = std::sync::Arc::new(store);
+    let provider = grafeo_service::auth::AuthProvider::with_token_store(
+        Some(admin_token.to_string()),
+        None,
+        None,
+        store_arc,
+    )
+    .unwrap();
+
+    let service = grafeo_service::ServiceState::new_in_memory_with_auth_provider(300, provider);
+    let state = grafeo_server::AppState::new(
+        service,
+        vec![],
+        grafeo_service::types::EnabledFeatures::default(),
+    );
+    let base = spawn_server_from_state(state).await;
+    (base, admin_token.to_string(), token_infos)
+}
+
+/// Database list filtering: a scoped token sees only its databases.
+#[cfg(feature = "auth")]
+#[tokio::test]
+async fn auth_scoped_token_filters_database_list() {
+    use grafeo_service::auth::TokenScope;
+
+    let scope = TokenScope {
+        role: grafeo_service::auth::Role::ReadWrite,
+        databases: vec!["db1".to_string()],
+    };
+    let (base, admin_token, tokens) =
+        spawn_server_with_token_store("admin-tok", vec![("scoped-tok", "scoped-svc", scope)]).await;
+    let scoped_token = &tokens[0].0;
+    let client = Client::new();
+
+    // Create db1 and db2 with admin token
+    let resp = client
+        .post(format!("{base}/db"))
+        .header("Authorization", format!("Bearer {admin_token}"))
+        .json(&json!({"name": "db1"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let resp = client
+        .post(format!("{base}/db"))
+        .header("Authorization", format!("Bearer {admin_token}"))
+        .json(&json!({"name": "db2"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Admin sees all three databases (default + db1 + db2)
+    let resp = client
+        .get(format!("{base}/db"))
+        .header("Authorization", format!("Bearer {admin_token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    let dbs = body["databases"].as_array().unwrap();
+    assert!(dbs.len() >= 3, "admin should see all databases");
+
+    // Scoped token sees only db1
+    let resp = client
+        .get(format!("{base}/db"))
+        .header("Authorization", format!("Bearer {scoped_token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    let dbs = body["databases"].as_array().unwrap();
+    assert_eq!(dbs.len(), 1, "scoped token should see only db1");
+    assert_eq!(dbs[0]["name"], "db1");
+}
+
+/// Database access check: scoped token cannot create a database outside its scope.
+#[cfg(feature = "auth")]
+#[tokio::test]
+async fn auth_scoped_token_cannot_create_db_outside_scope() {
+    use grafeo_service::auth::TokenScope;
+
+    let scope = TokenScope {
+        role: grafeo_service::auth::Role::ReadWrite,
+        databases: vec!["allowed-db".to_string()],
+    };
+    let (base, _admin_token, tokens) = spawn_server_with_token_store(
+        "admin-tok-2",
+        vec![("scoped-tok-2", "scoped-create", scope)],
+    )
+    .await;
+    let scoped_token = &tokens[0].0;
+    let client = Client::new();
+
+    // Scoped token tries to create a database outside its scope: should be 403
+    let resp = client
+        .post(format!("{base}/db"))
+        .header("Authorization", format!("Bearer {scoped_token}"))
+        .json(&json!({"name": "forbidden-db"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        403,
+        "scoped token should not create databases outside its scope"
+    );
+
+    // Scoped token can create a database within its scope
+    let resp = client
+        .post(format!("{base}/db"))
+        .header("Authorization", format!("Bearer {scoped_token}"))
+        .json(&json!({"name": "allowed-db"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "scoped token should be able to create databases within its scope"
+    );
+}
+
+/// Database access check: scoped token cannot delete a database outside its scope.
+#[cfg(feature = "auth")]
+#[tokio::test]
+async fn auth_scoped_token_cannot_delete_db_outside_scope() {
+    use grafeo_service::auth::TokenScope;
+
+    let scope = TokenScope {
+        role: grafeo_service::auth::Role::ReadWrite,
+        databases: vec!["my-db".to_string()],
+    };
+    let (base, admin_token, tokens) =
+        spawn_server_with_token_store("admin-tok-3", vec![("scoped-tok-3", "scoped-del", scope)])
+            .await;
+    let scoped_token = &tokens[0].0;
+    let client = Client::new();
+
+    // Admin creates a database the scoped token does not have access to
+    let resp = client
+        .post(format!("{base}/db"))
+        .header("Authorization", format!("Bearer {admin_token}"))
+        .json(&json!({"name": "other-db"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Scoped token tries to delete it: 403
+    let resp = client
+        .delete(format!("{base}/db/other-db"))
+        .header("Authorization", format!("Bearer {scoped_token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        403,
+        "scoped token should not delete databases outside its scope"
+    );
+}
+
+/// Transaction owner mismatch: begin with one token, query with another.
+#[cfg(feature = "auth")]
+#[tokio::test]
+async fn auth_tx_owner_mismatch_rejected() {
+    use grafeo_service::auth::TokenScope;
+
+    let scope_a = TokenScope {
+        role: grafeo_service::auth::Role::ReadWrite,
+        databases: vec![],
+    };
+    let scope_b = TokenScope {
+        role: grafeo_service::auth::Role::ReadWrite,
+        databases: vec![],
+    };
+    let (base, _admin_token, tokens) = spawn_server_with_token_store(
+        "admin-tok-4",
+        vec![("token-a", "svc-a", scope_a), ("token-b", "svc-b", scope_b)],
+    )
+    .await;
+    let token_a = &tokens[0].0;
+    let token_b = &tokens[1].0;
+    let client = Client::new();
+
+    // Token A begins a transaction
+    let resp = client
+        .post(format!("{base}/tx/begin"))
+        .header("Authorization", format!("Bearer {token_a}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    let session_id = body["session_id"].as_str().unwrap().to_string();
+
+    // Token A can query the transaction
+    let resp = client
+        .post(format!("{base}/tx/query"))
+        .header("Authorization", format!("Bearer {token_a}"))
+        .header("X-Session-Id", &session_id)
+        .json(&json!({"query": "MATCH (n) RETURN count(n)"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "owner token should be able to query");
+
+    // Token B tries to query the same transaction: should fail (404, session not found)
+    let resp = client
+        .post(format!("{base}/tx/query"))
+        .header("Authorization", format!("Bearer {token_b}"))
+        .header("X-Session-Id", &session_id)
+        .json(&json!({"query": "MATCH (n) RETURN count(n)"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        404,
+        "different token should not be able to query another token's transaction"
+    );
+
+    // Token B tries to commit: should also fail
+    let resp = client
+        .post(format!("{base}/tx/commit"))
+        .header("Authorization", format!("Bearer {token_b}"))
+        .header("X-Session-Id", &session_id)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        404,
+        "different token should not be able to commit another token's transaction"
+    );
+
+    // Token A can still commit successfully
+    let resp = client
+        .post(format!("{base}/tx/commit"))
+        .header("Authorization", format!("Bearer {token_a}"))
+        .header("X-Session-Id", &session_id)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "owner token should be able to commit its own transaction"
+    );
+}
+
+/// Graph store with auth identity: PUT and GET on /db/{name}/graph-store with a scoped token.
+#[cfg(feature = "auth")]
+#[tokio::test]
+async fn auth_graph_store_with_scoped_token() {
+    use grafeo_service::auth::TokenScope;
+
+    let scope = TokenScope {
+        role: grafeo_service::auth::Role::ReadWrite,
+        databases: vec!["default".to_string()],
+    };
+    let (base, admin_token, tokens) = spawn_server_with_token_store(
+        "admin-tok-5",
+        vec![("scoped-gs-tok", "graph-store-svc", scope)],
+    )
+    .await;
+    let scoped_token = &tokens[0].0;
+    let client = Client::new();
+
+    // Scoped token can PUT to graph-store on "default" (its scope)
+    let resp = client
+        .put(format!("{base}/db/default/graph-store?default"))
+        .header("Authorization", format!("Bearer {scoped_token}"))
+        .header("content-type", "application/n-triples")
+        .body("")
+        .send()
+        .await
+        .unwrap();
+    // SPARQL might not be enabled: accept 204 (success) or 400 (sparql disabled)
+    assert!(
+        resp.status() == 204 || resp.status() == 400,
+        "scoped token should reach graph-store handler, got {}",
+        resp.status()
+    );
+
+    // Scoped token can GET from graph-store on "default"
+    let resp = client
+        .get(format!("{base}/db/default/graph-store?default"))
+        .header("Authorization", format!("Bearer {scoped_token}"))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status() == 200 || resp.status() == 400,
+        "scoped token should reach graph-store GET, got {}",
+        resp.status()
+    );
+
+    // Admin creates "other-db"
+    let resp = client
+        .post(format!("{base}/db"))
+        .header("Authorization", format!("Bearer {admin_token}"))
+        .json(&json!({"name": "otherdb"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Admin can access graph-store on "otherdb"
+    let resp = client
+        .get(format!("{base}/db/otherdb/graph-store?default"))
+        .header("Authorization", format!("Bearer {admin_token}"))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status() == 200 || resp.status() == 400,
+        "admin should reach graph-store on otherdb, got {}",
+        resp.status()
+    );
+
+    // Scoped token must NOT access graph-store on "otherdb" (out of scope)
+    let resp = client
+        .get(format!("{base}/db/otherdb/graph-store?default"))
+        .header("Authorization", format!("Bearer {scoped_token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        403,
+        "scoped token should be denied graph-store on out-of-scope db, got {}",
+        resp.status()
+    );
+
+    let resp = client
+        .put(format!("{base}/db/otherdb/graph-store?default"))
+        .header("Authorization", format!("Bearer {scoped_token}"))
+        .header("content-type", "application/n-triples")
+        .body("")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        403,
+        "scoped token should be denied graph-store PUT on out-of-scope db, got {}",
+        resp.status()
+    );
+
+    let resp = client
+        .delete(format!("{base}/db/otherdb/graph-store?default"))
+        .header("Authorization", format!("Bearer {scoped_token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        403,
+        "scoped token should be denied graph-store DELETE on out-of-scope db, got {}",
+        resp.status()
+    );
+}
+
+/// Transaction rollback with owner mismatch.
+#[cfg(feature = "auth")]
+#[tokio::test]
+async fn auth_tx_rollback_owner_mismatch_rejected() {
+    use grafeo_service::auth::TokenScope;
+
+    let scope_a = TokenScope {
+        role: grafeo_service::auth::Role::ReadWrite,
+        databases: vec![],
+    };
+    let scope_b = TokenScope {
+        role: grafeo_service::auth::Role::ReadWrite,
+        databases: vec![],
+    };
+    let (base, _admin_token, tokens) = spawn_server_with_token_store(
+        "admin-tok-6",
+        vec![
+            ("tok-owner", "owner-svc", scope_a),
+            ("tok-intruder", "intruder-svc", scope_b),
+        ],
+    )
+    .await;
+    let owner_token = &tokens[0].0;
+    let intruder_token = &tokens[1].0;
+    let client = Client::new();
+
+    // Owner begins a transaction
+    let resp = client
+        .post(format!("{base}/tx/begin"))
+        .header("Authorization", format!("Bearer {owner_token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    let session_id = body["session_id"].as_str().unwrap().to_string();
+
+    // Intruder tries to rollback: should fail
+    let resp = client
+        .post(format!("{base}/tx/rollback"))
+        .header("Authorization", format!("Bearer {intruder_token}"))
+        .header("X-Session-Id", &session_id)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        404,
+        "different token should not rollback another token's transaction"
+    );
+
+    // Owner can rollback
+    let resp = client
+        .post(format!("{base}/tx/rollback"))
+        .header("Authorization", format!("Bearer {owner_token}"))
+        .header("X-Session-Id", &session_id)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "owner token should be able to rollback its own transaction"
+    );
+}
+
+/// Scoped token denied on tx/begin for out-of-scope database.
+#[cfg(feature = "auth")]
+#[tokio::test]
+async fn auth_tx_begin_denied_for_out_of_scope_database() {
+    use grafeo_service::auth::TokenScope;
+
+    let scope = TokenScope {
+        role: grafeo_service::auth::Role::ReadWrite,
+        databases: vec!["default".to_string()],
+    };
+    let (base, admin_token, tokens) =
+        spawn_server_with_token_store("admin-tok-tx", vec![("scoped-tx-tok", "tx-svc", scope)])
+            .await;
+    let scoped_token = &tokens[0].0;
+    let client = Client::new();
+
+    // Admin creates "otherdb"
+    let resp = client
+        .post(format!("{base}/db"))
+        .header("Authorization", format!("Bearer {admin_token}"))
+        .json(&json!({"name": "otherdb"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Scoped token can begin tx on "default" (in scope)
+    let resp = client
+        .post(format!("{base}/tx/begin"))
+        .header("Authorization", format!("Bearer {scoped_token}"))
+        .json(&json!({"database": "default"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "scoped token should begin tx on in-scope db"
+    );
+
+    // Scoped token denied tx/begin on "otherdb" (out of scope)
+    let resp = client
+        .post(format!("{base}/tx/begin"))
+        .header("Authorization", format!("Bearer {scoped_token}"))
+        .json(&json!({"database": "otherdb"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        403,
+        "scoped token should be denied tx/begin on out-of-scope db, got {}",
+        resp.status()
+    );
+}
+
+/// Scoped token denied batch query on out-of-scope database.
+#[cfg(feature = "auth")]
+#[tokio::test]
+async fn auth_batch_denied_for_out_of_scope_database() {
+    use grafeo_service::auth::TokenScope;
+
+    let scope = TokenScope {
+        role: grafeo_service::auth::Role::ReadWrite,
+        databases: vec!["default".to_string()],
+    };
+    let (base, admin_token, tokens) = spawn_server_with_token_store(
+        "admin-tok-batch",
+        vec![("scoped-batch-tok", "batch-svc", scope)],
+    )
+    .await;
+    let scoped_token = &tokens[0].0;
+    let client = Client::new();
+
+    // Admin creates "batchdb"
+    let resp = client
+        .post(format!("{base}/db"))
+        .header("Authorization", format!("Bearer {admin_token}"))
+        .json(&json!({"name": "batchdb"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Scoped token denied batch on "batchdb" (out of scope)
+    let resp = client
+        .post(format!("{base}/batch"))
+        .header("Authorization", format!("Bearer {scoped_token}"))
+        .json(&json!({
+            "queries": [{"query": "MATCH (n) RETURN n"}],
+            "database": "batchdb"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        403,
+        "scoped token should be denied batch on out-of-scope db"
+    );
+}
+
+/// WebSocket query denied for out-of-scope database.
+#[cfg(feature = "auth")]
+#[tokio::test]
+async fn auth_websocket_denied_for_out_of_scope_database() {
+    use grafeo_service::auth::TokenScope;
+    use tokio_tungstenite::tungstenite;
+
+    let scope = TokenScope {
+        role: grafeo_service::auth::Role::ReadWrite,
+        databases: vec!["default".to_string()],
+    };
+    let (base, admin_token, tokens) =
+        spawn_server_with_token_store("admin-tok-ws", vec![("scoped-ws-tok", "ws-svc", scope)])
+            .await;
+    let scoped_token = &tokens[0].0;
+    let client = Client::new();
+
+    // Admin creates "wsdb"
+    let resp = client
+        .post(format!("{base}/db"))
+        .header("Authorization", format!("Bearer {admin_token}"))
+        .json(&json!({"name": "wsdb"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Connect WebSocket with scoped token
+    let ws_url = base.replace("http://", "ws://") + "/ws";
+    let request = tungstenite::http::Request::builder()
+        .uri(&ws_url)
+        .header("Authorization", format!("Bearer {scoped_token}"))
+        .header("Host", "localhost")
+        .header("Upgrade", "websocket")
+        .header("Connection", "Upgrade")
+        .header(
+            "Sec-WebSocket-Key",
+            tungstenite::handshake::client::generate_key(),
+        )
+        .header("Sec-WebSocket-Version", "13")
+        .body(())
+        .unwrap();
+    let (mut ws, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+
+    use futures_util::{SinkExt, StreamExt};
+
+    // Send query targeting out-of-scope database
+    let msg = json!({
+        "type": "query",
+        "id": "q1",
+        "query": "MATCH (n) RETURN n",
+        "database": "wsdb"
+    });
+    ws.send(tungstenite::Message::Text(msg.to_string().into()))
+        .await
+        .unwrap();
+
+    let response = ws.next().await.unwrap().unwrap();
+    let resp_json: serde_json::Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
+    assert_eq!(
+        resp_json["type"], "error",
+        "websocket should return error for out-of-scope db"
+    );
+    assert_eq!(resp_json["error"], "forbidden");
+
+    ws.close(None).await.ok();
+}
+
+/// Database info/stats/schema denied for out-of-scope database.
+#[cfg(feature = "auth")]
+#[tokio::test]
+async fn auth_database_info_denied_for_out_of_scope() {
+    use grafeo_service::auth::TokenScope;
+
+    let scope = TokenScope {
+        role: grafeo_service::auth::Role::ReadWrite,
+        databases: vec!["default".to_string()],
+    };
+    let (base, admin_token, tokens) = spawn_server_with_token_store(
+        "admin-tok-info",
+        vec![("scoped-info-tok", "info-svc", scope)],
+    )
+    .await;
+    let scoped_token = &tokens[0].0;
+    let client = Client::new();
+
+    // Admin creates "infodb"
+    let resp = client
+        .post(format!("{base}/db"))
+        .header("Authorization", format!("Bearer {admin_token}"))
+        .json(&json!({"name": "infodb"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Scoped token denied GET /db/infodb (info)
+    let resp = client
+        .get(format!("{base}/db/infodb"))
+        .header("Authorization", format!("Bearer {scoped_token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        403,
+        "info should be denied for out-of-scope db"
+    );
+
+    // Scoped token denied GET /db/infodb/stats
+    let resp = client
+        .get(format!("{base}/db/infodb/stats"))
+        .header("Authorization", format!("Bearer {scoped_token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        403,
+        "stats should be denied for out-of-scope db"
+    );
 }

@@ -98,6 +98,10 @@ pub async fn serve(
     addr: SocketAddr,
     options: GwpOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Extract the pending auth map before the builder consumes the backend.
+    #[cfg(feature = "auth")]
+    let pending = backend.pending.clone();
+
     let mut builder = gwp::server::GqlServer::builder(backend);
 
     if let Some(timeout) = options.idle_timeout {
@@ -118,9 +122,24 @@ pub async fn serve(
         builder = builder.tls(tls_config);
     }
 
+    // Keep the reaper handle alive until serve() returns so it can be
+    // aborted when the runtime shuts down.
+    #[cfg(feature = "auth")]
+    let _reaper: Option<tokio::task::JoinHandle<()>>;
+
     #[cfg(feature = "auth")]
     if let Some(provider) = options.auth_provider {
-        builder = builder.auth(auth::GwpAuthValidator::new(provider));
+        let pending_clone = pending.clone();
+        builder = builder.auth(auth::GwpAuthValidator::new(provider, pending_clone));
+
+        // Reap stale auth nonces from clients that never completed session creation.
+        _reaper = Some(grafeo_service::auth::spawn_pending_auth_reaper(
+            pending,
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(30),
+        ));
+    } else {
+        _reaper = None;
     }
 
     if let Some(signal) = options.shutdown {

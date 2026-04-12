@@ -66,6 +66,10 @@ impl ApiError {
         Self(ServiceError::TooManyRequests)
     }
 
+    pub fn forbidden(msg: impl Into<String>) -> Self {
+        Self(ServiceError::Forbidden(msg.into()))
+    }
+
     pub fn internal(msg: impl Into<String>) -> Self {
         Self(ServiceError::Internal(msg.into()))
     }
@@ -97,6 +101,7 @@ impl IntoResponse for ApiError {
             ServiceError::TooManyRequests => {
                 (StatusCode::TOO_MANY_REQUESTS, "too_many_requests", None)
             }
+            ServiceError::Forbidden(msg) => (StatusCode::FORBIDDEN, "forbidden", Some(msg.clone())),
             ServiceError::ReadOnly => (
                 StatusCode::FORBIDDEN,
                 "read_only",
@@ -196,6 +201,15 @@ mod tests {
         assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(body["error"], "too_many_requests");
         assert!(body["detail"].is_null());
+    }
+
+    #[tokio::test]
+    async fn forbidden_maps_to_403() {
+        let (status, body) =
+            parse_response(ApiError::forbidden("not allowed for this database")).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body["error"], "forbidden");
+        assert_eq!(body["detail"], "not allowed for this database");
     }
 
     #[tokio::test]

@@ -45,7 +45,7 @@ pub use state::AppState;
     info(
         title = "Grafeo Server API",
         description = "HTTP API for the Grafeo graph database engine.\n\nSupports GQL, Cypher, GraphQL, Gremlin, SPARQL, and SQL/PGQ query languages with both auto-commit and explicit transaction modes.\n\nAll query languages support CALL procedures for 22+ built-in graph algorithms (PageRank, BFS, WCC, Dijkstra, Louvain, etc.).\n\nMulti-database support: create, delete, and query named databases.",
-        version = "0.5.35",
+        version = "0.5.36",
         license(name = "Apache-2.0"),
     ),
     paths(
@@ -133,6 +133,17 @@ pub use state::AppState;
     )
 )]
 struct ApiDoc;
+
+/// Token management OpenAPI paths (only compiled with `auth` feature).
+#[cfg(feature = "auth")]
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    routes::tokens::create_token,
+    routes::tokens::list_tokens,
+    routes::tokens::get_token,
+    routes::tokens::delete_token,
+))]
+struct TokenApiDoc;
 
 // ---------------------------------------------------------------------------
 // Router
@@ -229,9 +240,12 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/{db}/backups", get(routes::backup::list_backups))
         .route("/admin/{db}/restore", post(routes::backup::restore_backup))
         .route("/backups", get(routes::backup::list_all_backups))
-        .route("/backups/{filename}", delete(routes::backup::delete_backup))
         .route(
-            "/backups/download/{filename}",
+            "/admin/{db}/backups/{filename}",
+            delete(routes::backup::delete_backup),
+        )
+        .route(
+            "/admin/{db}/backups/download/{filename}",
             get(routes::backup::download_backup),
         )
         // Search
@@ -242,6 +256,18 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(routes::system::health))
         .route("/system/resources", get(routes::system::system_resources))
         .route("/metrics", get(routes::system::metrics_endpoint));
+
+    // Token management (requires `auth` feature)
+    #[cfg(feature = "auth")]
+    let api = api
+        .route(
+            "/admin/tokens",
+            get(routes::tokens::list_tokens).post(routes::tokens::create_token),
+        )
+        .route(
+            "/admin/tokens/{id}",
+            get(routes::tokens::get_token).delete(routes::tokens::delete_token),
+        );
 
     // Sync: offline-first changefeed + apply (requires `sync` feature, implies `cdc`)
     #[cfg(feature = "sync")]
@@ -290,7 +316,15 @@ pub fn router(state: AppState) -> Router {
         .layer(cors_layer(&state))
         .with_state(state);
 
-    api.merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", ApiDoc::openapi()))
+    #[allow(unused_mut)]
+    let mut openapi = ApiDoc::openapi();
+    #[cfg(feature = "auth")]
+    {
+        use utoipa::OpenApi;
+        openapi.merge(TokenApiDoc::openapi());
+    }
+
+    api.merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", openapi))
 }
 
 /// Serve the HTTP router on the given listener with graceful shutdown.

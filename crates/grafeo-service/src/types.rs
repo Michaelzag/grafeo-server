@@ -425,7 +425,7 @@ fn default_db_name() -> String {
 // Backup types
 // ============================================================================
 
-/// Information about a single backup file.
+/// Information about a single backup segment.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct BackupEntry {
@@ -433,16 +433,18 @@ pub struct BackupEntry {
     pub filename: String,
     /// Database this backup belongs to.
     pub database: String,
+    /// Segment kind: "full" or "incremental".
+    pub kind: String,
     /// Backup file size in bytes.
     pub size_bytes: u64,
     /// Backup creation timestamp (ISO 8601).
     pub created_at: String,
-    /// Node count at time of backup.
-    pub node_count: u64,
-    /// Edge count at time of backup.
-    pub edge_count: u64,
-    /// Database epoch at time of backup.
-    pub epoch: u64,
+    /// Start epoch (inclusive).
+    pub start_epoch: u64,
+    /// End epoch (inclusive).
+    pub end_epoch: u64,
+    /// CRC-32 checksum of the backup file.
+    pub checksum: u32,
 }
 
 /// Request to restore a database from a backup.
@@ -451,6 +453,66 @@ pub struct BackupEntry {
 pub struct RestoreRequest {
     /// Backup filename (within the configured backup directory).
     pub backup: String,
+}
+
+// ============================================================================
+// Token management types
+// ============================================================================
+
+/// Request to create a new API token.
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CreateTokenRequest {
+    /// Human-readable name for the token.
+    pub name: String,
+    /// Permission scope.
+    #[serde(default)]
+    pub scope: TokenScopeRequest,
+}
+
+/// Scope definition in a create/update request.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct TokenScopeRequest {
+    /// Permission level: "admin", "read-write", "read-only".
+    #[serde(default = "default_role")]
+    pub role: String,
+    /// Databases this token can access. Empty = all databases.
+    #[serde(default)]
+    pub databases: Vec<String>,
+}
+
+impl Default for TokenScopeRequest {
+    fn default() -> Self {
+        Self {
+            role: "read-only".to_string(),
+            databases: vec![],
+        }
+    }
+}
+
+impl TokenScopeRequest {
+    /// Parse the wire-format role string into the engine's [`Role`] enum.
+    pub fn to_role(&self) -> Result<grafeo_engine::auth::Role, crate::error::ServiceError> {
+        crate::auth::str_to_role(&self.role).map_err(crate::error::ServiceError::BadRequest)
+    }
+}
+
+fn default_role() -> String {
+    "read-only".to_string()
+}
+
+/// Token response (returned from list/get/create endpoints).
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct TokenResponse {
+    pub id: String,
+    pub name: String,
+    pub scope: TokenScopeRequest,
+    pub created_at: String,
+    /// The plaintext token. Only present in the create response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 // ============================================================================
@@ -532,4 +594,138 @@ pub struct ImportResponse {
     pub nodes_created: usize,
     /// Number of edges created.
     pub edges_created: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // TokenScopeRequest::to_role
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn to_role_admin() {
+        let req = TokenScopeRequest {
+            role: "admin".to_string(),
+            databases: vec![],
+        };
+        assert_eq!(req.to_role().unwrap(), grafeo_engine::auth::Role::Admin);
+    }
+
+    #[test]
+    fn to_role_read_write() {
+        let req = TokenScopeRequest {
+            role: "read-write".to_string(),
+            databases: vec![],
+        };
+        assert_eq!(req.to_role().unwrap(), grafeo_engine::auth::Role::ReadWrite);
+    }
+
+    #[test]
+    fn to_role_read_only() {
+        let req = TokenScopeRequest {
+            role: "read-only".to_string(),
+            databases: vec![],
+        };
+        assert_eq!(req.to_role().unwrap(), grafeo_engine::auth::Role::ReadOnly);
+    }
+
+    #[test]
+    fn to_role_invalid() {
+        let req = TokenScopeRequest {
+            role: "superuser".to_string(),
+            databases: vec![],
+        };
+        assert!(req.to_role().is_err());
+    }
+
+    #[test]
+    fn to_role_default() {
+        let req = TokenScopeRequest::default();
+        assert_eq!(req.to_role().unwrap(), grafeo_engine::auth::Role::ReadOnly);
+    }
+
+    #[test]
+    fn to_role_empty_string_is_error() {
+        let req = TokenScopeRequest {
+            role: String::new(),
+            databases: vec![],
+        };
+        let err = req.to_role().unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown role"),
+            "error message should mention unknown role, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn to_role_case_sensitive() {
+        let req = TokenScopeRequest {
+            role: "Admin".to_string(),
+            databases: vec![],
+        };
+        assert!(
+            req.to_role().is_err(),
+            "role matching should be case-sensitive"
+        );
+    }
+
+    #[test]
+    fn token_scope_request_default_fields() {
+        let req = TokenScopeRequest::default();
+        assert_eq!(req.role, "read-only");
+        assert!(req.databases.is_empty());
+    }
+
+    #[test]
+    fn token_scope_request_serde_default_role() {
+        // Deserialize with no role field: should use the serde default ("read-only")
+        let json = r#"{"databases": ["mydb"]}"#;
+        let req: TokenScopeRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.role, "read-only");
+        assert_eq!(req.databases, vec!["mydb"]);
+    }
+
+    #[test]
+    fn token_scope_request_serde_roundtrip() {
+        let req = TokenScopeRequest {
+            role: "read-only".to_string(),
+            databases: vec!["db1".to_string(), "db2".to_string()],
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: TokenScopeRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.role, "read-only");
+        assert_eq!(back.databases, vec!["db1", "db2"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // DatabaseType
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn database_type_display() {
+        assert_eq!(DatabaseType::Lpg.to_string(), "lpg");
+        assert_eq!(DatabaseType::Rdf.to_string(), "rdf");
+        assert_eq!(DatabaseType::OwlSchema.to_string(), "owl-schema");
+        assert_eq!(DatabaseType::RdfsSchema.to_string(), "rdfs-schema");
+        assert_eq!(DatabaseType::JsonSchema.to_string(), "json-schema");
+    }
+
+    #[test]
+    fn database_type_default_is_lpg() {
+        assert_eq!(DatabaseType::default(), DatabaseType::Lpg);
+    }
+
+    #[test]
+    fn storage_mode_default_is_in_memory() {
+        assert_eq!(StorageMode::default(), StorageMode::InMemory);
+    }
+
+    #[test]
+    fn storage_mode_as_str() {
+        assert_eq!(StorageMode::InMemory.as_str(), "in-memory");
+        assert_eq!(StorageMode::Persistent.as_str(), "persistent");
+    }
 }

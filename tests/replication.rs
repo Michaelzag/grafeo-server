@@ -33,6 +33,8 @@ async fn spawn_primary() -> String {
         auth_user: None,
         #[cfg(feature = "auth")]
         auth_password: None,
+        #[cfg(feature = "auth")]
+        token_store_path: None,
         #[cfg(feature = "replication")]
         replication_mode: grafeo_service::replication::ReplicationMode::Primary,
         backup_dir: None,
@@ -64,6 +66,8 @@ async fn spawn_replica(primary_url: &str) -> String {
         auth_user: None,
         #[cfg(feature = "auth")]
         auth_password: None,
+        #[cfg(feature = "auth")]
+        token_store_path: None,
         #[cfg(feature = "replication")]
         replication_mode: grafeo_service::replication::ReplicationMode::Replica {
             primary_url: primary_url.to_string(),
@@ -177,7 +181,7 @@ async fn replicate(client: &Client, primary: &str, replica: &str, since: u64) ->
     assert!(
         apply_resp["conflicts"]
             .as_array()
-            .map_or(true, |c| c.is_empty()),
+            .is_none_or(|c| c.is_empty()),
         "Unexpected conflicts during replication: {:?}",
         apply_resp["conflicts"]
     );

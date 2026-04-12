@@ -9,6 +9,7 @@ use grafeo_service::types::BatchQuery;
 
 use crate::encode::{convert_json_params, query_result_to_response};
 use crate::error::{ApiError, ErrorBody};
+use crate::middleware::auth_context::AuthContext;
 use crate::state::AppState;
 use crate::types::{BatchQueryRequest, BatchQueryResponse};
 
@@ -30,6 +31,7 @@ use crate::types::{BatchQueryRequest, BatchQueryResponse};
 )]
 pub async fn batch_query(
     State(state): State<AppState>,
+    auth: AuthContext,
     Json(req): Json<BatchQueryRequest>,
 ) -> Result<Json<BatchQueryResponse>, ApiError> {
     if req.queries.is_empty() {
@@ -40,6 +42,7 @@ pub async fn batch_query(
     }
 
     let db_name = grafeo_service::resolve_db_name(req.database.as_deref());
+    auth.check_db_access(db_name)?;
     let timeout = state.effective_timeout(req.timeout_ms);
 
     // Convert HTTP batch items to service BatchQuery (JSON params → engine params)
@@ -56,6 +59,8 @@ pub async fn batch_query(
         })
         .collect::<Result<Vec<_>, ApiError>>()?;
 
+    let identity = auth.identity(state.service().is_query_read_only());
+
     let results = QueryService::batch_execute(
         state.databases(),
         state.metrics(),
@@ -63,6 +68,7 @@ pub async fn batch_query(
         batch_queries,
         timeout,
         state.service().is_query_read_only(),
+        Some(identity),
     )
     .await?;
 

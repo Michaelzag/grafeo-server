@@ -4,15 +4,20 @@
 //! is delegated to `grafeo_service::auth::AuthProvider`.
 //!
 //! Supports three mechanisms (checked in order):
-//!   1. `Authorization: Bearer <token>` — compared against `--auth-token`
-//!   2. `X-API-Key: <token>` — compared against `--auth-token`
+//!   1. `Authorization: Bearer <token>` — compared against configured tokens
+//!   2. `X-API-Key: <token>` — compared against configured tokens
 //!   3. `Authorization: Basic <base64(user:pass)>` — compared against `--auth-user`/`--auth-password`
+//!
+//! On success, inserts `TokenInfo` into request extensions so downstream
+//! handlers can check token scope via the `AuthContext` extractor.
 
 use axum::extract::{Request, State};
 use axum::http::Method;
 use axum::middleware::Next;
 use axum::response::Response;
 use base64::Engine as _;
+
+use grafeo_service::auth::TokenInfo;
 
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -29,9 +34,10 @@ fn is_exempt(path: &str, method: &Method) -> bool {
 ///
 /// When no authentication is configured, all requests pass through.
 /// `/health` and `/metrics` are always exempt.
+/// On success, `TokenInfo` is inserted into request extensions.
 pub async fn auth_middleware(
     State(state): State<AppState>,
-    req: Request,
+    mut req: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
     let auth_provider = match state.auth() {
@@ -52,25 +58,33 @@ pub async fn auth_middleware(
 
     // Try Bearer token
     if let Some(token) = auth_header_ref.and_then(|v| v.strip_prefix("Bearer "))
-        && auth_provider.check_bearer(token)
+        && let Some(info) = auth_provider.check_bearer(token)
     {
+        req.extensions_mut().insert(info);
         return Ok(next.run(req).await);
     }
 
-    // Try API key header (checked against the same bearer token)
+    // Try API key header (checked against the same token set)
     if let Some(key) = req.headers().get("x-api-key").and_then(|v| v.to_str().ok())
-        && auth_provider.check_bearer(key)
+        && let Some(info) = auth_provider.check_bearer(key)
     {
+        req.extensions_mut().insert(info);
         return Ok(next.run(req).await);
     }
 
-    // Try HTTP Basic auth
+    // Try HTTP Basic auth (always admin scope)
     if let Some(encoded) = auth_header_ref.and_then(|v| v.strip_prefix("Basic "))
         && let Ok(decoded_bytes) = base64::engine::general_purpose::STANDARD.decode(encoded)
         && let Ok(decoded_str) = std::str::from_utf8(&decoded_bytes)
         && let Some((user, pass)) = decoded_str.split_once(':')
         && auth_provider.check_basic(user, pass)
     {
+        // Basic auth = admin, unrestricted
+        req.extensions_mut().insert(TokenInfo {
+            id: "_basic".to_string(),
+            name: "basic-auth".to_string(),
+            scope: grafeo_service::auth::TokenScope::default(),
+        });
         return Ok(next.run(req).await);
     }
 

@@ -5,6 +5,41 @@ All notable changes to grafeo-server are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.36] - Unreleased
+
+Role-based access control, per-database token scoping, and engine 0.5.36 alignment (Identity, Role, session-level permission enforcement).
+
+### Added
+
+- **Per-database token scoping**: runtime token CRUD with role and database restrictions ([#52](https://github.com/GrafeoDB/grafeo-server/issues/52), implementation by [@Michaelzag](https://github.com/Michaelzag))
+  - `POST /admin/tokens`: create a scoped API token (plaintext returned once)
+  - `GET /admin/tokens`: list all tokens (metadata only)
+  - `GET /admin/tokens/{id}`: get a single token
+  - `DELETE /admin/tokens/{id}`: revoke a token (immediate effect)
+- **Token roles**: `admin` (full access), `read-write` (data mutations), `read-only` (queries only). Mapped to engine `Role::Admin`, `Role::ReadWrite`, `Role::ReadOnly`
+- **Token database scoping**: tokens can be restricted to specific databases. Empty list = all databases. Enforced at the HTTP middleware layer (403 for scope violations)
+- **`TokenStore`**: SHA-256 hashed token storage in `{data_dir}/tokens.json` with atomic writes via temp file + rename
+- **`AuthContext::identity()`**: builds engine `Identity` from token metadata, caps to `ReadOnly` when server is in read-only mode
+- **CLI flags**: `--auth-user` / `--auth-password` for HTTP Basic auth, `--token-store-path` for explicit token store location
+- **HTTP Basic auth**: `Authorization: Basic <base64>` with constant-time comparison (always admin scope)
+- **GWP identity-scoped sessions**: GWP (gRPC) connections now pass authenticated identity through to session creation via `SessionConfig.auth_info`. Sessions are scoped to the token's role, with engine-level permission enforcement
+- **BoltR identity-scoped sessions**: Bolt v5.x connections now pass authenticated identity via `set_session_auth()` after LOGON. Sessions are recreated with the token's role, matching HTTP transport behavior
+
+### Changed
+
+- **grafeo-engine 0.5.36**: role-based access control, `Identity`/`Role`/`StatementKind` types, `session_with_identity()`, `session_with_role()`, `PermissionDenied` error with context
+- **Identity-scoped sessions**: all HTTP route handlers (query, batch, transaction, SPARQL protocol, Graph Store protocol, WebSocket) now create sessions via `session_with_identity()` instead of `session()`. The engine enforces statement-level permissions after parsing, before execution
+- **`check_bearer` returns `Option<TokenInfo>`** instead of `bool`, carrying role and database scope through the middleware chain
+- **`TokenScope.role` uses engine `Role` enum** instead of string, with serde bridge for JSON wire format (`"admin"`, `"read-write"`, `"read-only"`)
+- **`session_read_only()` replaced**: all GWP and BoltR backends use `session_with_role(Role::ReadOnly)` instead of the deprecated `session_read_only()`
+- **Permission denied errors**: engine `PermissionDenied` (via `QueryError::Semantic`) now maps to `ServiceError::Forbidden` (HTTP 403) instead of `BadRequest` (400)
+- **`--auth-token` preserved**: legacy single token stays as root/bootstrap credential with implicit `Admin` role and no database restrictions
+- **Token store auto-activation**: only derives `{data_dir}/tokens.json` when at least one credential is configured, preventing spurious auth activation from `--data-dir` alone
+- **gwp dependency updated to 0.2.1**: `AuthValidator` returns `AuthInfo`, `SessionConfig` carries `auth_info`
+- **boltr dependency updated to 0.2.0**: `AuthValidator` returns `AuthInfo`, `BoltBackend.set_session_auth()`
+- **GWP/BoltR validators use PendingAuth mechanism** (DashMap) to pass full `TokenInfo` from validator to backend
+- **GWP/BoltR sessions preserve identity** across database switches and session resets
+
 ## [0.5.35] - 2026-04-11
 
 Backup/restore, CDC error handling, and engine 0.5.35 alignment (non-exhaustive enums, private QueryResult rows, new feature flags).

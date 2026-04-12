@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
-use grafeo_engine::{AccessMode, Config, DurabilityMode, GrafeoDB};
+use grafeo_engine::{Config, DurabilityMode, GrafeoDB};
 
 use crate::error::ServiceError;
 use crate::types::{CreateDatabaseRequest, DatabaseType, StorageMode};
@@ -153,7 +153,7 @@ impl DatabaseEntry {
 /// Thread-safe registry of named database instances.
 pub struct DatabaseManager {
     databases: DashMap<String, Arc<DatabaseEntry>>,
-    /// If `Some`, databases are persisted under `{data_dir}/{name}/grafeo.db`.
+    /// If `Some`, databases are persisted under `{data_dir}/{name}/data.grafeo`.
     data_dir: Option<PathBuf>,
     /// When `true`, reject all write operations.
     read_only: bool,
@@ -178,21 +178,42 @@ impl DatabaseManager {
         if let Some(ref dir) = mgr.data_dir {
             std::fs::create_dir_all(dir).expect("failed to create data directory");
 
-            // Migration: old layout had `{data_dir}/grafeo.db` directly.
-            // Move it to `{data_dir}/default/grafeo.db`.
-            let old_path = dir.join("grafeo.db");
-            if old_path.exists() {
+            // Migration: old flat layout had `{data_dir}/grafeo.db` directly.
+            // Skip in read-only mode — can't rename on read-only mounts.
+            let old_flat = dir.join("grafeo.db");
+            if !mgr.read_only && old_flat.exists() {
                 let new_dir = dir.join("default");
                 std::fs::create_dir_all(&new_dir).expect("failed to create default db directory");
-                let new_path = new_dir.join("grafeo.db");
+                let new_path = new_dir.join("data.grafeo");
                 if !new_path.exists() {
-                    tracing::info!("Migrating old database layout to default/grafeo.db");
-                    std::fs::rename(&old_path, &new_path).expect("failed to migrate database file");
-                    // Also move WAL file if present
+                    tracing::info!("Migrating old flat layout to default/data.grafeo");
+                    std::fs::rename(&old_flat, &new_path).expect("failed to migrate database file");
                     let old_wal = dir.join("grafeo.db.wal");
                     if old_wal.exists() {
-                        let new_wal = new_dir.join("grafeo.db.wal");
+                        let new_wal = new_dir.join("data.grafeo.wal");
                         let _ = std::fs::rename(&old_wal, &new_wal);
+                    }
+                }
+            }
+
+            // Read-only flat layout: open {data_dir}/grafeo.db directly as "default"
+            if mgr.read_only && old_flat.exists() && !mgr.databases.contains_key("default") {
+                tracing::info!("Opening legacy flat layout in read-only mode");
+                match GrafeoDB::open_read_only(old_flat.to_str().unwrap()) {
+                    Ok(db) => {
+                        mgr.databases.insert(
+                            "default".to_string(),
+                            Arc::new(DatabaseEntry::new(
+                                Arc::new(db),
+                                DatabaseMetadata {
+                                    storage_mode: "persistent".to_string(),
+                                    ..Default::default()
+                                },
+                            )),
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to open legacy flat layout");
                     }
                 }
             }
@@ -202,14 +223,31 @@ impl DatabaseManager {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if path.is_dir() {
-                        let db_file = path.join("grafeo.db");
-                        if db_file.exists() {
+                        // Migrate legacy grafeo.db → data.grafeo (skip in read-only mode)
+                        let legacy = path.join("grafeo.db");
+                        let current = path.join("data.grafeo");
+                        if !mgr.read_only && legacy.exists() && !current.exists() {
+                            tracing::info!(path = %path.display(), "Migrating grafeo.db to data.grafeo");
+                            let _ = std::fs::rename(&legacy, &current);
+                            let legacy_wal = path.join("grafeo.db.wal");
+                            if legacy_wal.exists() {
+                                let _ = std::fs::rename(&legacy_wal, path.join("data.grafeo.wal"));
+                            }
+                        }
+
+                        // Try data.grafeo first, fall back to legacy grafeo.db
+                        let db_file = if current.exists() {
+                            current
+                        } else if legacy.exists() {
+                            legacy
+                        } else {
+                            continue;
+                        };
+                        {
                             let name = entry.file_name().to_string_lossy().to_string();
                             tracing::info!(name = %name, read_only = mgr.read_only, "Opening database");
                             let open_result = if mgr.read_only {
-                                let db_config = Config::persistent(db_file.to_str().unwrap())
-                                    .with_access_mode(AccessMode::ReadOnly);
-                                GrafeoDB::with_config(db_config)
+                                GrafeoDB::open_read_only(db_file.to_str().unwrap())
                             } else {
                                 GrafeoDB::open(db_file.to_str().unwrap())
                             };
@@ -242,12 +280,11 @@ impl DatabaseManager {
                 let default_dir = dir.join("default");
                 std::fs::create_dir_all(&default_dir)
                     .expect("failed to create default db directory");
-                let db_path = default_dir.join("grafeo.db");
+                let db_path = default_dir.join("data.grafeo");
                 tracing::info!("Creating default persistent database");
                 let db = if mgr.read_only {
-                    let db_config = Config::persistent(db_path.to_str().unwrap())
-                        .with_access_mode(AccessMode::ReadOnly);
-                    GrafeoDB::with_config(db_config).expect("failed to create default db")
+                    GrafeoDB::open_read_only(db_path.to_str().unwrap())
+                        .expect("failed to create default db")
                 } else {
                     GrafeoDB::open(db_path.to_str().unwrap()).expect("failed to create default db")
                 };
@@ -386,7 +423,7 @@ impl DatabaseManager {
                 std::fs::create_dir_all(&db_dir).map_err(|e| {
                     ServiceError::Internal(format!("failed to create directory: {e}"))
                 })?;
-                let db_path = db_dir.join("grafeo.db");
+                let db_path = db_dir.join("data.grafeo");
                 Config::persistent(db_path.to_str().unwrap())
             }
         };
@@ -848,6 +885,199 @@ mod tests {
     // -----------------------------------------------------------------------
     // get_available
     // -----------------------------------------------------------------------
+
+    // -----------------------------------------------------------------------
+    // Persistent mode + migration
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn persistent_manager_creates_data_grafeo() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = DatabaseManager::new(Some(dir.path().to_str().unwrap()), false);
+        assert!(mgr.get("default").is_some());
+        // Should use data.grafeo, not grafeo.db
+        assert!(dir.path().join("default").join("data.grafeo").exists());
+        assert!(!dir.path().join("default").join("grafeo.db").exists());
+    }
+
+    #[test]
+    fn persistent_manager_read_only() {
+        let dir = tempfile::tempdir().unwrap();
+        // First create a writable manager to set up the database
+        {
+            let _mgr = DatabaseManager::new(Some(dir.path().to_str().unwrap()), false);
+        }
+        // Now open in read-only mode
+        let mgr = DatabaseManager::new(Some(dir.path().to_str().unwrap()), true);
+        assert!(mgr.get("default").is_some());
+        assert!(mgr.is_read_only());
+    }
+
+    #[test]
+    fn migrate_grafeo_db_to_data_grafeo() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_dir = dir.path().join("mydb");
+        std::fs::create_dir_all(&db_dir).unwrap();
+
+        // Create a database at the old path
+        let old_path = db_dir.join("grafeo.db");
+        {
+            let db = GrafeoDB::open(old_path.to_str().unwrap()).unwrap();
+            db.session().execute("INSERT (:Test {v: 1})").unwrap();
+            db.close().ok();
+        }
+        assert!(old_path.exists());
+
+        // Opening the manager should migrate it
+        let mgr = DatabaseManager::new(Some(dir.path().to_str().unwrap()), false);
+
+        // Old file should be gone, new file should exist
+        assert!(!old_path.exists());
+        assert!(db_dir.join("data.grafeo").exists());
+
+        // Data should still be accessible
+        let entry = mgr.get("mydb").unwrap();
+        assert_eq!(entry.db().node_count(), 1);
+    }
+
+    #[test]
+    fn migrate_grafeo_db_with_wal() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_dir = dir.path().join("waldb");
+        std::fs::create_dir_all(&db_dir).unwrap();
+
+        // Create old database
+        let old_path = db_dir.join("grafeo.db");
+        {
+            let db = GrafeoDB::open(old_path.to_str().unwrap()).unwrap();
+            db.close().ok();
+        }
+
+        // Create a fake WAL sidecar
+        let old_wal = db_dir.join("grafeo.db.wal");
+        std::fs::create_dir_all(&old_wal).unwrap();
+        std::fs::write(old_wal.join("wal_entry"), b"wal data").unwrap();
+
+        let _mgr = DatabaseManager::new(Some(dir.path().to_str().unwrap()), false);
+
+        // WAL should also be migrated
+        assert!(!old_wal.exists());
+        assert!(db_dir.join("data.grafeo.wal").exists());
+    }
+
+    #[test]
+    fn migrate_flat_layout_to_default_subdir() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create a database in the old flat layout (grafeo.db at root)
+        let flat_path = dir.path().join("grafeo.db");
+        {
+            let db = GrafeoDB::open(flat_path.to_str().unwrap()).unwrap();
+            db.session().execute("INSERT (:Flat {v: 42})").unwrap();
+            db.close().ok();
+        }
+
+        let mgr = DatabaseManager::new(Some(dir.path().to_str().unwrap()), false);
+
+        // Flat file should be gone, default subdir should have data.grafeo
+        assert!(!flat_path.exists());
+        assert!(dir.path().join("default").join("data.grafeo").exists());
+
+        let entry = mgr.get("default").unwrap();
+        assert_eq!(entry.db().node_count(), 1);
+    }
+
+    #[test]
+    fn read_only_rejects_create() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create writable first to set up default
+        {
+            let _mgr = DatabaseManager::new(Some(dir.path().to_str().unwrap()), false);
+        }
+        // Reopen read-only
+        let mgr = DatabaseManager::new(Some(dir.path().to_str().unwrap()), true);
+        let req = CreateDatabaseRequest {
+            name: "new-db".to_string(),
+            database_type: DatabaseType::Lpg,
+            storage_mode: StorageMode::InMemory,
+            options: DatabaseOptions::default(),
+            schema_file: None,
+            schema_filename: None,
+        };
+        assert!(matches!(mgr.create(&req), Err(ServiceError::ReadOnly)));
+    }
+
+    #[test]
+    fn read_only_rejects_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let mgr = DatabaseManager::new(Some(dir.path().to_str().unwrap()), false);
+            let req = CreateDatabaseRequest {
+                name: "todelete".to_string(),
+                database_type: DatabaseType::Lpg,
+                storage_mode: StorageMode::Persistent,
+                options: DatabaseOptions::default(),
+                schema_file: None,
+                schema_filename: None,
+            };
+            mgr.create(&req).unwrap();
+        }
+        let mgr = DatabaseManager::new(Some(dir.path().to_str().unwrap()), true);
+        assert!(matches!(
+            mgr.delete("todelete"),
+            Err(ServiceError::ReadOnly)
+        ));
+    }
+
+    #[test]
+    fn read_only_preserves_data() {
+        let dir = tempfile::tempdir().unwrap();
+        // Write data
+        {
+            let mgr = DatabaseManager::new(Some(dir.path().to_str().unwrap()), false);
+            let entry = mgr.get("default").unwrap();
+            entry
+                .db()
+                .session()
+                .execute("INSERT (:RoTest {v: 99})")
+                .unwrap();
+            assert_eq!(entry.db().node_count(), 1);
+        }
+        // Reopen read-only and verify data is preserved
+        let mgr = DatabaseManager::new(Some(dir.path().to_str().unwrap()), true);
+        let entry = mgr.get("default").unwrap();
+        assert_eq!(entry.db().node_count(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_durability
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_durability_all_modes() {
+        assert!(matches!(parse_durability("sync"), Ok(DurabilityMode::Sync)));
+        assert!(matches!(
+            parse_durability("nosync"),
+            Ok(DurabilityMode::NoSync)
+        ));
+        assert!(matches!(parse_durability("batch"), Ok(_)));
+        assert!(matches!(
+            parse_durability("adaptive"),
+            Ok(DurabilityMode::Adaptive { .. })
+        ));
+    }
+
+    #[test]
+    fn parse_durability_case_insensitive() {
+        assert!(parse_durability("SYNC").is_ok());
+        assert!(parse_durability("Batch").is_ok());
+    }
+
+    #[test]
+    fn parse_durability_invalid() {
+        let err = parse_durability("unknown").unwrap_err();
+        assert!(matches!(err, ServiceError::BadRequest(_)));
+    }
 
     #[test]
     fn get_available_returns_entry() {

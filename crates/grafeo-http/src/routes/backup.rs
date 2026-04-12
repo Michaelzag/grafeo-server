@@ -6,15 +6,16 @@ use axum::http::header;
 use axum::response::IntoResponse;
 
 use crate::error::ApiError;
+use crate::middleware::auth_context::AuthContext;
 use crate::state::AppState;
 
 use grafeo_service::backup::BackupService;
 use grafeo_service::types;
 
-/// Create a backup of a database.
+/// Create a full backup of a database.
 ///
-/// Exports a point-in-time snapshot to a `.grafeo` file. The database
-/// remains fully available during the backup (hot snapshot via MVCC).
+/// Exports a point-in-time snapshot. The database stays available during
+/// the backup (hot snapshot via MVCC checkpoint).
 #[utoipa::path(
     post,
     path = "/admin/{db}/backup",
@@ -30,20 +31,14 @@ use grafeo_service::types;
 )]
 pub async fn create_backup(
     State(state): State<AppState>,
+    auth: AuthContext,
     Path(db): Path<String>,
 ) -> Result<Json<types::BackupEntry>, ApiError> {
-    let backup_dir = state
-        .backup_dir()
-        .ok_or_else(|| {
-            grafeo_service::error::ServiceError::BadRequest(
-                "backup not configured: start server with --backup-dir".to_string(),
-            )
-        })?
-        .to_path_buf();
+    auth.check_admin()?;
+    let backup_dir = require_backup_dir(&state)?;
 
     let entry = BackupService::backup_database(state.databases(), &db, &backup_dir).await?;
 
-    // Enforce retention if configured
     if let Some(keep) = state.backup_retention() {
         let _ = BackupService::enforce_retention(&db, &backup_dir, keep);
     }
@@ -66,17 +61,11 @@ pub async fn create_backup(
 )]
 pub async fn list_backups(
     State(state): State<AppState>,
+    auth: AuthContext,
     Path(db): Path<String>,
 ) -> Result<Json<Vec<types::BackupEntry>>, ApiError> {
-    let backup_dir = state
-        .backup_dir()
-        .ok_or_else(|| {
-            grafeo_service::error::ServiceError::BadRequest(
-                "backup not configured: start server with --backup-dir".to_string(),
-            )
-        })?
-        .to_path_buf();
-
+    auth.check_admin()?;
+    let backup_dir = require_backup_dir(&state)?;
     let entries = BackupService::list_backups(Some(&db), &backup_dir)?;
     Ok(Json(entries))
 }
@@ -93,24 +82,18 @@ pub async fn list_backups(
 )]
 pub async fn list_all_backups(
     State(state): State<AppState>,
+    auth: AuthContext,
 ) -> Result<Json<Vec<types::BackupEntry>>, ApiError> {
-    let backup_dir = state
-        .backup_dir()
-        .ok_or_else(|| {
-            grafeo_service::error::ServiceError::BadRequest(
-                "backup not configured: start server with --backup-dir".to_string(),
-            )
-        })?
-        .to_path_buf();
-
+    auth.check_admin()?;
+    let backup_dir = require_backup_dir(&state)?;
     let entries = BackupService::list_backups(None, &backup_dir)?;
     Ok(Json(entries))
 }
 
 /// Restore a database from a backup file.
 ///
-/// Creates a safety backup before replacing data. The database is briefly
-/// unavailable during the restore (close, replace, reopen).
+/// Creates a safety backup before replacing data. The database returns 503
+/// during the restore.
 #[utoipa::path(
     post,
     path = "/admin/{db}/restore",
@@ -128,38 +111,36 @@ pub async fn list_all_backups(
 )]
 pub async fn restore_backup(
     State(state): State<AppState>,
+    auth: AuthContext,
     Path(db): Path<String>,
     Json(req): Json<types::RestoreRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let backup_dir = state
-        .backup_dir()
-        .ok_or_else(|| {
-            grafeo_service::error::ServiceError::BadRequest(
-                "backup not configured: start server with --backup-dir".to_string(),
-            )
-        })?
-        .to_path_buf();
+    auth.check_admin()?;
+    let backup_dir = require_backup_dir(&state)?;
 
-    // Prevent path traversal in backup filename
-    if req.backup.contains('/') || req.backup.contains('\\') || req.backup.contains("..") {
-        return Err(grafeo_service::error::ServiceError::BadRequest(
-            "invalid backup filename".to_string(),
-        )
-        .into());
+    // Validate both params — axum percent-decodes path segments
+    for param in [&db, &req.backup] {
+        if param.contains('/') || param.contains('\\') || param.contains("..") {
+            return Err(grafeo_service::error::ServiceError::BadRequest(
+                "invalid path parameter".to_string(),
+            )
+            .into());
+        }
     }
 
-    let backup_path = backup_dir.join(&req.backup);
+    let backup_path = backup_dir.join(&db).join(&req.backup);
 
     BackupService::restore_database(state.databases(), &db, &backup_path, &backup_dir).await?;
 
     Ok(Json(serde_json::json!({ "restored": true })))
 }
 
-/// Delete a specific backup file.
+/// Delete a specific backup file from a database.
 #[utoipa::path(
     delete,
-    path = "/backups/{filename}",
+    path = "/admin/{db}/backups/{filename}",
     params(
+        ("db" = String, Path, description = "Database name"),
         ("filename" = String, Path, description = "Backup filename"),
     ),
     responses(
@@ -171,36 +152,23 @@ pub async fn restore_backup(
 )]
 pub async fn delete_backup(
     State(state): State<AppState>,
-    Path(filename): Path<String>,
+    auth: AuthContext,
+    Path((db, filename)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let backup_dir = state
-        .backup_dir()
-        .ok_or_else(|| {
-            grafeo_service::error::ServiceError::BadRequest(
-                "backup not configured: start server with --backup-dir".to_string(),
-            )
-        })?
-        .to_path_buf();
-
-    // Path traversal check (defense-in-depth; service layer also validates)
-    if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
-        return Err(grafeo_service::error::ServiceError::BadRequest(
-            "invalid backup filename".to_string(),
-        )
-        .into());
-    }
-
-    BackupService::delete_backup(&filename, &backup_dir)?;
+    auth.check_admin()?;
+    let backup_dir = require_backup_dir(&state)?;
+    BackupService::delete_backup(&db, &filename, &backup_dir)?;
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
 
 /// Download a backup file.
 ///
-/// Streams the `.grafeo` file with `Content-Disposition: attachment`.
+/// Streams the backup file with `Content-Disposition: attachment`.
 #[utoipa::path(
     get,
-    path = "/admin/backups/download/{filename}",
+    path = "/admin/{db}/backups/download/{filename}",
     params(
+        ("db" = String, Path, description = "Database name"),
         ("filename" = String, Path, description = "Backup filename"),
     ),
     responses(
@@ -212,42 +180,39 @@ pub async fn delete_backup(
 )]
 pub async fn download_backup(
     State(state): State<AppState>,
-    Path(filename): Path<String>,
+    auth: AuthContext,
+    Path((db, filename)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let backup_dir = state
-        .backup_dir()
-        .ok_or_else(|| {
-            grafeo_service::error::ServiceError::BadRequest(
-                "backup not configured: start server with --backup-dir".to_string(),
-            )
-        })?
-        .to_path_buf();
+    auth.check_admin()?;
+    let backup_dir = require_backup_dir(&state)?;
 
-    // Prevent path traversal
-    if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
-        return Err(grafeo_service::error::ServiceError::BadRequest(
-            "invalid backup filename".to_string(),
-        )
-        .into());
+    // Validate both params — axum percent-decodes path segments
+    for param in [&db, &filename] {
+        if param.contains('/') || param.contains('\\') || param.contains("..") {
+            return Err(grafeo_service::error::ServiceError::BadRequest(
+                "invalid path parameter".to_string(),
+            )
+            .into());
+        }
     }
 
-    let path = backup_dir.join(&filename);
-    if !path.exists() {
+    grafeo_service::backup::ensure_migrated(&backup_dir);
+
+    let file_path = backup_dir.join(&db).join(&filename);
+    if !file_path.exists() {
         return Err(grafeo_service::error::ServiceError::NotFound(format!(
-            "backup '{filename}' not found"
+            "backup '{filename}' not found for database '{db}'"
         ))
         .into());
     }
 
-    let file = tokio::fs::File::open(&path)
+    let file = tokio::fs::File::open(&file_path)
         .await
         .map_err(|e| grafeo_service::error::ServiceError::Internal(e.to_string()))?;
 
     let stream = tokio_util::io::ReaderStream::new(file);
     let body = Body::from_stream(stream);
 
-    // Sanitize filename for Content-Disposition: strip characters that
-    // could break or manipulate the header value.
     let safe_filename: String = filename
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
@@ -262,4 +227,16 @@ pub async fn download_backup(
     ];
 
     Ok((headers, body))
+}
+
+fn require_backup_dir(state: &AppState) -> Result<std::path::PathBuf, ApiError> {
+    state
+        .backup_dir()
+        .ok_or_else(|| {
+            grafeo_service::error::ServiceError::BadRequest(
+                "backup not configured: start server with --backup-dir".to_string(),
+            )
+        })
+        .map(|p| p.to_path_buf())
+        .map_err(Into::into)
 }

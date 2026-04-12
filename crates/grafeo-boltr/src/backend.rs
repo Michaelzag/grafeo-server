@@ -1,4 +1,4 @@
-//! `GrafeoBackend` — implements `boltr::server::BoltBackend` for Grafeo.
+//! `GrafeoBackend`: implements `boltr::server::BoltBackend` for Grafeo.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use boltr::error::BoltError;
 use boltr::server::{
-    BoltBackend, BoltRecord, ResultMetadata, ResultStream, RoutingServer, RoutingTable,
+    AuthInfo, BoltBackend, BoltRecord, ResultMetadata, ResultStream, RoutingServer, RoutingTable,
     SessionConfig, SessionHandle, SessionProperty, TransactionHandle,
 };
 use boltr::types::{BoltDict, BoltValue};
@@ -19,9 +19,18 @@ use grafeo_service::query::QueryService;
 
 use crate::encode::{convert_params, grafeo_to_bolt};
 
+#[cfg(feature = "auth")]
+use crate::auth::PendingAuth;
+
 struct GrafeoSession {
     engine_session: grafeo_engine::Session,
     database: String,
+    /// Identity from authentication, used when creating new sessions on database switch.
+    #[cfg(feature = "auth")]
+    identity: Option<grafeo_engine::auth::Identity>,
+    /// Databases this token is authorized to access (empty = all).
+    #[cfg(feature = "auth")]
+    db_scope: Vec<String>,
 }
 
 /// Bolt backend implementation for Grafeo.
@@ -29,6 +38,8 @@ pub struct GrafeoBackend {
     state: ServiceState,
     sessions: DashMap<String, Arc<Mutex<GrafeoSession>>>,
     advertise_addr: Option<SocketAddr>,
+    #[cfg(feature = "auth")]
+    pub(crate) pending: PendingAuth,
 }
 
 impl GrafeoBackend {
@@ -37,6 +48,22 @@ impl GrafeoBackend {
             state,
             sessions: DashMap::new(),
             advertise_addr: None,
+            #[cfg(feature = "auth")]
+            pending: std::sync::Arc::new(DashMap::new()),
+        }
+    }
+
+    /// Creates a new backend with a shared `PendingAuth` map.
+    ///
+    /// The same map must be passed to the `BoltrAuthValidator` so that
+    /// token identity flows from authentication to session creation.
+    #[cfg(feature = "auth")]
+    pub fn with_pending_auth(state: ServiceState, pending: PendingAuth) -> Self {
+        Self {
+            state,
+            sessions: DashMap::new(),
+            advertise_addr: None,
+            pending,
         }
     }
 
@@ -68,7 +95,7 @@ impl BoltBackend for GrafeoBackend {
         let engine_session = tokio::task::spawn_blocking(move || {
             let db = entry.db();
             if ro {
-                db.session_read_only()
+                db.session_with_role(grafeo_engine::auth::Role::ReadOnly)
             } else {
                 db.session()
             }
@@ -82,10 +109,72 @@ impl BoltBackend for GrafeoBackend {
             Arc::new(Mutex::new(GrafeoSession {
                 engine_session,
                 database: "default".to_owned(),
+                #[cfg(feature = "auth")]
+                identity: None,
+                #[cfg(feature = "auth")]
+                db_scope: Vec::new(),
             })),
         );
         tracing::debug!(session_id = %id, "Bolt session created");
         Ok(SessionHandle(id))
+    }
+
+    async fn set_session_auth(
+        &self,
+        session: &SessionHandle,
+        auth_info: AuthInfo,
+    ) -> Result<(), BoltError> {
+        // "none" scheme is now rejected by the validator, so an empty
+        // principal should not occur. Treat it as an error when auth is on.
+        if auth_info.principal.is_empty() {
+            #[cfg(feature = "auth")]
+            return Err(BoltError::Authentication("authentication required".into()));
+            #[cfg(not(feature = "auth"))]
+            return Ok(());
+        }
+
+        #[cfg(feature = "auth")]
+        {
+            let token_info = self
+                .pending
+                .remove(&auth_info.principal)
+                .map(|(_, (info, _))| info);
+
+            if let Some(info) = token_info {
+                let identity = info.identity();
+                let db_scope = info.scope.databases.clone();
+                let session_arc = self.get_session(session)?;
+
+                // Recreate the engine session with the resolved identity.
+                let entry = {
+                    let s = session_arc.lock();
+                    self.state
+                        .databases()
+                        .get(&s.database)
+                        .ok_or_else(|| BoltError::Session("database not found".into()))?
+                };
+
+                let ro = self.state.is_query_read_only();
+                let id_clone = identity.clone();
+                let engine_session = tokio::task::spawn_blocking(move || {
+                    let db = entry.db();
+                    let effective = grafeo_service::auth::cap_identity_read_only(id_clone, ro);
+                    db.session_with_identity(effective)
+                })
+                .await
+                .map_err(BoltError::backend)?;
+
+                let mut s = session_arc.lock();
+                s.engine_session = engine_session;
+                s.identity = Some(identity);
+                s.db_scope = db_scope;
+            }
+        }
+
+        #[cfg(not(feature = "auth"))]
+        let _ = (session, auth_info);
+
+        Ok(())
     }
 
     async fn close_session(&self, session: &SessionHandle) -> Result<(), BoltError> {
@@ -101,6 +190,18 @@ impl BoltBackend for GrafeoBackend {
     ) -> Result<(), BoltError> {
         match property {
             SessionProperty::Database(db_name) => {
+                // Check database scope before allowing the switch.
+                #[cfg(feature = "auth")]
+                {
+                    let session_arc = self.get_session(session)?;
+                    let s = session_arc.lock();
+                    if !s.db_scope.is_empty() && !s.db_scope.iter().any(|d| d == &db_name) {
+                        return Err(BoltError::Session(format!(
+                            "not authorized for database '{db_name}'"
+                        )));
+                    }
+                }
+
                 let entry = self
                     .state
                     .databases()
@@ -108,10 +209,24 @@ impl BoltBackend for GrafeoBackend {
                     .map_err(|e| BoltError::Session(e.to_string()))?;
 
                 let ro = self.state.is_query_read_only();
+
+                // Reuse stored identity when switching databases.
+                #[cfg(feature = "auth")]
+                let identity = {
+                    let session_arc = self.get_session(session)?;
+                    let s = session_arc.lock();
+                    s.identity.clone()
+                };
+
                 let engine_session = tokio::task::spawn_blocking(move || {
                     let db = entry.db();
+                    #[cfg(feature = "auth")]
+                    if let Some(id) = identity {
+                        let effective = grafeo_service::auth::cap_identity_read_only(id, ro);
+                        return db.session_with_identity(effective);
+                    }
                     if ro {
-                        db.session_read_only()
+                        db.session_with_role(grafeo_engine::auth::Role::ReadOnly)
                     } else {
                         db.session()
                     }
@@ -136,10 +251,24 @@ impl BoltBackend for GrafeoBackend {
             .ok_or_else(|| BoltError::Session("default database not found".into()))?;
 
         let ro = self.state.is_query_read_only();
+
+        // Preserve identity across reset.
+        #[cfg(feature = "auth")]
+        let identity = {
+            let session_arc = self.get_session(session)?;
+            let s = session_arc.lock();
+            s.identity.clone()
+        };
+
         let engine_session = tokio::task::spawn_blocking(move || {
             let db = entry.db();
+            #[cfg(feature = "auth")]
+            if let Some(id) = identity {
+                let effective = grafeo_service::auth::cap_identity_read_only(id, ro);
+                return db.session_with_identity(effective);
+            }
             if ro {
-                db.session_read_only()
+                db.session_with_role(grafeo_engine::auth::Role::ReadOnly)
             } else {
                 db.session()
             }
@@ -188,9 +317,12 @@ impl BoltBackend for GrafeoBackend {
         })
         .await
         .map_err(BoltError::backend)?
-        .map_err(|e| BoltError::Query {
-            code: "Neo.ClientError.Statement.SyntaxError".to_string(),
-            message: e.to_string(),
+        .map_err(|e| match e {
+            grafeo_service::error::ServiceError::Forbidden(msg) => BoltError::Forbidden(msg),
+            other => BoltError::Query {
+                code: "Neo.ClientError.Statement.SyntaxError".to_string(),
+                message: other.to_string(),
+            },
         })?;
 
         let columns = result.columns.clone();
