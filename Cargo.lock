@@ -1341,6 +1341,8 @@ dependencies = [
 [[package]]
 name = "grafeo-adapters"
 version = "0.5.37"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea0e09f1d8141e4bcefa30440dc27eba2a803f71bf94b2e452d5dbc40aa25c9b"
 dependencies = [
  "bincode",
  "grafeo-common",
@@ -1373,6 +1375,8 @@ dependencies = [
 [[package]]
 name = "grafeo-common"
 version = "0.5.37"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12f43b3fd1dcc08af34baa2f2a37371a31102d79d231c59e1d3b0919f83ffbe8"
 dependencies = [
  "arcstr",
  "bincode",
@@ -1393,6 +1397,8 @@ dependencies = [
 [[package]]
 name = "grafeo-core"
 version = "0.5.37"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5fb4daa51baa3f60c03dcf4c964f76e1777b8fe530867617ceee6bcb13b2fb7"
 dependencies = [
  "arcstr",
  "bincode",
@@ -1421,6 +1427,8 @@ dependencies = [
 [[package]]
 name = "grafeo-engine"
 version = "0.5.37"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b61af581329324e68d6a08edf583b569c2811b75bb01e035d6bcd67057695e1"
 dependencies = [
  "anyhow",
  "arcstr",
@@ -1564,6 +1572,8 @@ dependencies = [
 [[package]]
 name = "grafeo-storage"
 version = "0.5.37"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7383f75036747ddf0b2ab3cd0056c0c05a33d885fdb9bd27ddb13332a21763c"
 dependencies = [
  "bincode",
  "byteorder",
