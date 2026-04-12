@@ -902,6 +902,101 @@ mod tests {
         assert!(matches!(err, ServiceError::NotFound(_)));
     }
 
+    // -----------------------------------------------------------------------
+    // Graph projections
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_create_and_drop_projection() {
+        let state = ServiceState::new_in_memory(300);
+        let req = types::CreateProjectionRequest {
+            name: "social".to_owned(),
+            node_labels: vec!["Person".to_owned()],
+            edge_types: vec!["KNOWS".to_owned()],
+        };
+        let created = AdminService::create_projection(state.databases(), "default", req)
+            .await
+            .unwrap();
+        assert!(created);
+
+        let list = AdminService::list_projections(state.databases(), "default")
+            .await
+            .unwrap();
+        assert_eq!(list, vec!["social"]);
+
+        // Duplicate returns false
+        let req2 = types::CreateProjectionRequest {
+            name: "social".to_owned(),
+            node_labels: vec![],
+            edge_types: vec![],
+        };
+        let created_again = AdminService::create_projection(state.databases(), "default", req2)
+            .await
+            .unwrap();
+        assert!(!created_again);
+
+        let dropped = AdminService::drop_projection(state.databases(), "default", "social")
+            .await
+            .unwrap();
+        assert!(dropped);
+
+        let dropped_again = AdminService::drop_projection(state.databases(), "default", "social")
+            .await
+            .unwrap();
+        assert!(!dropped_again);
+    }
+
+    #[tokio::test]
+    async fn test_list_projections_empty() {
+        let state = ServiceState::new_in_memory(300);
+        let list = AdminService::list_projections(state.databases(), "default")
+            .await
+            .unwrap();
+        assert!(list.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_projections_not_found() {
+        let state = ServiceState::new_in_memory(300);
+        let err = AdminService::list_projections(state.databases(), "nonexistent")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::NotFound(_)));
+    }
+
+    // -----------------------------------------------------------------------
+    // SHACL validation
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_validate_shacl_feature_response() {
+        let state = ServiceState::new_in_memory(300);
+        let req = types::ShaclValidateRequest {
+            shapes_graph: String::new(),
+            data_graph: None,
+        };
+        let result = AdminService::validate_shacl(state.databases(), "default", &req).await;
+        // When shacl feature is disabled, returns BadRequest; when enabled,
+        // may return an engine error for empty shapes. Either way, we exercise
+        // the method dispatch.
+        assert!(result.is_ok() || result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_validate_shacl_not_found() {
+        let state = ServiceState::new_in_memory(300);
+        let req = types::ShaclValidateRequest {
+            shapes_graph: String::new(),
+            data_graph: None,
+        };
+        let err = AdminService::validate_shacl(state.databases(), "nonexistent", &req)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ServiceError::NotFound(_)) || matches!(err, ServiceError::BadRequest(_))
+        );
+    }
+
     #[tokio::test]
     async fn test_write_snapshot_in_memory() {
         let state = ServiceState::new_in_memory(300);

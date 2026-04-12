@@ -328,3 +328,122 @@ pub async fn admin_validate_shacl(
     let report = AdminService::validate_shacl(state.databases(), &db, &req).await?;
     Ok(Json(report))
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    fn app() -> axum::Router {
+        let state = crate::AppState::new_in_memory(300);
+        crate::router(state)
+    }
+
+    // -----------------------------------------------------------------------
+    // Projection endpoints
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn create_projection_returns_ok() {
+        let resp = app()
+            .oneshot(
+                Request::post("/admin/default/projections")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"name":"test","node_labels":["A"],"edge_types":["R"]}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::OK || resp.status() == StatusCode::BAD_REQUEST,
+            "unexpected: {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn list_projections_returns_ok() {
+        let resp = app()
+            .oneshot(
+                Request::get("/admin/default/projections")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn drop_projection_returns_ok() {
+        let resp = app()
+            .oneshot(
+                Request::delete("/admin/default/projections/nonexistent")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn projection_database_not_found() {
+        let resp = app()
+            .oneshot(
+                Request::get("/admin/nonexistent/projections")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // -----------------------------------------------------------------------
+    // SHACL validation endpoint
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn validate_shacl_returns_response() {
+        let resp = app()
+            .oneshot(
+                Request::post("/admin/default/validate/shacl")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"shapes_graph":"@prefix sh: <http://www.w3.org/ns/shacl#> ."}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // 200 when shacl feature enabled, 400 when disabled
+        assert!(
+            resp.status() == StatusCode::OK || resp.status() == StatusCode::BAD_REQUEST,
+            "unexpected: {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_shacl_database_not_found() {
+        let resp = app()
+            .oneshot(
+                Request::post("/admin/nonexistent/validate/shacl")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"shapes_graph":""}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // 404 or 400 (if shacl feature not enabled, error fires before DB lookup)
+        assert!(
+            resp.status() == StatusCode::NOT_FOUND || resp.status() == StatusCode::BAD_REQUEST,
+            "unexpected: {}",
+            resp.status()
+        );
+    }
+}

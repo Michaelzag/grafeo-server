@@ -299,3 +299,57 @@ fn require_backup_dir(state: &AppState) -> Result<std::path::PathBuf, ApiError> 
         .map(|p| p.to_path_buf())
         .map_err(Into::into)
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    fn app() -> axum::Router {
+        let state = crate::AppState::new_in_memory(300);
+        crate::router(state)
+    }
+
+    #[tokio::test]
+    async fn incremental_backup_no_backup_dir() {
+        // In-memory AppState has no backup dir configured
+        let resp = app()
+            .oneshot(
+                Request::post("/admin/default/backup/incremental")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn restore_to_epoch_no_backup_dir() {
+        let resp = app()
+            .oneshot(
+                Request::post("/admin/default/restore/epoch")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"epoch": 1}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn incremental_backup_database_not_found() {
+        let resp = app()
+            .oneshot(
+                Request::post("/admin/nonexistent/backup/incremental")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // 400 because backup dir not configured (checked before DB lookup)
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+}

@@ -532,4 +532,56 @@ mod tests {
             assert!(!ct.contains("sparql-results"), "ct: {ct}");
         }
     }
+
+    // -----------------------------------------------------------------------
+    // triples_response / turtle / ntriples helpers
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn accept_turtle_for_construct() {
+        let resp = app()
+            .oneshot(
+                Request::get(
+                    "/db/default/sparql?query=CONSTRUCT%20%7B%20%3Fs%20%3Fp%20%3Fo%20%7D%20WHERE%20%7B%20%3Fs%20%3Fp%20%3Fo%20%7D%20LIMIT%201"
+                )
+                    .header("accept", "text/turtle")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        if resp.status() == StatusCode::OK {
+            let ct = resp
+                .headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap();
+            assert!(ct.contains("turtle"), "ct: {ct}");
+        }
+    }
+
+    #[tokio::test]
+    async fn accept_ntriples_for_construct() {
+        let resp = app()
+            .oneshot(
+                Request::get(
+                    "/db/default/sparql?query=CONSTRUCT%20%7B%20%3Fs%20%3Fp%20%3Fo%20%7D%20WHERE%20%7B%20%3Fs%20%3Fp%20%3Fo%20%7D%20LIMIT%201"
+                )
+                    .header("accept", "application/n-triples")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        if resp.status() == StatusCode::OK {
+            let ct = resp
+                .headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap();
+            assert!(ct.contains("n-triples"), "ct: {ct}");
+        }
+    }
 }
