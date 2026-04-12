@@ -207,7 +207,7 @@ pub async fn graph_store_put(
 ) -> Result<Response, ApiError> {
     auth.check_db_access(&db_name)?;
     let target = resolve_target(&params)?;
-    let nt_triples = parse_body_to_ntriples(&headers, &body)?;
+    let parsed = parse_body_to_ntriples(&headers, &body)?;
 
     // Drop existing content.
     let drop_sparql = match target {
@@ -233,8 +233,8 @@ pub async fn graph_store_put(
     .await?;
 
     // Insert new content.
-    if !nt_triples.is_empty() {
-        let insert_sparql = build_insert_data(&target, &nt_triples);
+    if !parsed.lines.is_empty() {
+        let insert_sparql = build_insert_data(&target, &parsed);
         QueryService::execute(
             state.databases(),
             state.metrics(),
@@ -269,7 +269,7 @@ pub async fn graph_store_post(
     body: Bytes,
 ) -> Result<Response, ApiError> {
     auth.check_db_access(&db_name)?;
-    let nt_triples = parse_body_to_ntriples(&headers, &body)?;
+    let parsed = parse_body_to_ntriples(&headers, &body)?;
     let read_only = state.service().is_query_read_only();
     let identity = auth.identity(read_only);
 
@@ -292,9 +292,9 @@ pub async fn graph_store_post(
         )
         .await?;
 
-        if !nt_triples.is_empty() {
+        if !parsed.lines.is_empty() {
             let target = GraphTarget::Named(graph_iri.clone());
-            let insert_sparql = build_insert_data(&target, &nt_triples);
+            let insert_sparql = build_insert_data(&target, &parsed);
             QueryService::execute(
                 state.databases(),
                 state.metrics(),
@@ -321,8 +321,8 @@ pub async fn graph_store_post(
 
     let target = resolve_target(&params)?;
 
-    if !nt_triples.is_empty() {
-        let insert_sparql = build_insert_data(&target, &nt_triples);
+    if !parsed.lines.is_empty() {
+        let insert_sparql = build_insert_data(&target, &parsed);
         let timeout = state.effective_timeout(None);
         QueryService::execute(
             state.databases(),
@@ -394,13 +394,26 @@ pub async fn graph_store_delete(
 // Body parsing
 // ---------------------------------------------------------------------------
 
-/// Parses the request body into N-Triples lines (ready for INSERT DATA).
+/// Parsed RDF request body with prologue declarations separated from data.
+struct ParsedBody {
+    /// SPARQL PREFIX/BASE declarations extracted from Turtle `@prefix`/`@base`.
+    prologue: Vec<String>,
+    /// Data lines for inside the INSERT DATA block.
+    lines: Vec<String>,
+}
+
+/// Parses the request body into data lines and optional prologue declarations.
 ///
-/// Accepts `text/turtle` (converted line by line) and `application/n-triples`.
-/// For Turtle input, each triple is converted to its N-Triples representation.
-fn parse_body_to_ntriples(headers: &HeaderMap, body: &Bytes) -> Result<Vec<String>, ApiError> {
+/// Accepts `application/n-triples` and `text/turtle`.
+/// For Turtle input, `@prefix`/`@base` directives are extracted, converted to
+/// SPARQL `PREFIX`/`BASE` declarations, and returned in `ParsedBody::prologue`
+/// so callers can place them in the query prologue (outside INSERT DATA blocks).
+fn parse_body_to_ntriples(headers: &HeaderMap, body: &Bytes) -> Result<ParsedBody, ApiError> {
     if body.is_empty() {
-        return Ok(Vec::new());
+        return Ok(ParsedBody {
+            prologue: Vec::new(),
+            lines: Vec::new(),
+        });
     }
 
     let content_type = headers
@@ -420,32 +433,60 @@ fn parse_body_to_ntriples(headers: &HeaderMap, body: &Bytes) -> Result<Vec<Strin
     match base_ct {
         CT_NTRIPLES => {
             // N-Triples: each non-empty, non-comment line is a triple.
-            Ok(text
+            let lines = text
                 .lines()
                 .map(str::trim)
                 .filter(|l| !l.is_empty() && !l.starts_with('#'))
                 .map(String::from)
-                .collect())
+                .collect();
+            Ok(ParsedBody {
+                prologue: Vec::new(),
+                lines,
+            })
         }
         CT_TURTLE => {
-            // Turtle syntax is valid inside SPARQL INSERT DATA blocks,
-            // so we pass each line through as-is. The SPARQL parser handles
-            // @prefix, blank nodes, and all Turtle syntax.
-            Ok(text.lines().map(String::from).collect())
+            // Extract @prefix/@base directives and convert to SPARQL syntax.
+            // Per SPARQL 1.1 Update, PREFIX/BASE must appear in the query
+            // prologue, not inside INSERT DATA blocks.
+            let mut prologue = Vec::new();
+            let mut lines = Vec::new();
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if let Some(rest) = trimmed.strip_prefix("@prefix") {
+                    // @prefix foo: <uri> . → PREFIX foo: <uri>
+                    let rest = rest.trim_end().trim_end_matches('.').trim_end();
+                    prologue.push(format!("PREFIX{rest}"));
+                } else if let Some(rest) = trimmed.strip_prefix("@base") {
+                    // @base <uri> . → BASE <uri>
+                    let rest = rest.trim_end().trim_end_matches('.').trim_end();
+                    prologue.push(format!("BASE{rest}"));
+                } else {
+                    lines.push(line.to_string());
+                }
+            }
+            Ok(ParsedBody { prologue, lines })
         }
         _ => Err(ApiError::bad_request(format!(
-            "unsupported Content-Type: {base_ct}. Expected application/n-triples"
+            "unsupported Content-Type: {base_ct}. \
+             Expected application/n-triples or text/turtle"
         ))),
     }
 }
 
-/// Builds an `INSERT DATA { ... }` SPARQL statement from N-Triples lines.
-fn build_insert_data(target: &GraphTarget, nt_lines: &[String]) -> String {
-    let triples_block = nt_lines.join("\n");
+/// Builds an `INSERT DATA { ... }` SPARQL statement from parsed body.
+///
+/// Any prologue declarations (PREFIX/BASE) are prepended before the INSERT DATA.
+fn build_insert_data(target: &GraphTarget, parsed: &ParsedBody) -> String {
+    let triples_block = parsed.lines.join("\n");
+    let prologue = if parsed.prologue.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", parsed.prologue.join("\n"))
+    };
     match target {
-        GraphTarget::Default => format!("INSERT DATA {{\n{triples_block}\n}}"),
+        GraphTarget::Default => format!("{prologue}INSERT DATA {{\n{triples_block}\n}}"),
         GraphTarget::Named(iri) => {
-            format!("INSERT DATA {{ GRAPH <{iri}> {{\n{triples_block}\n}} }}")
+            format!("{prologue}INSERT DATA {{ GRAPH <{iri}> {{\n{triples_block}\n}} }}")
         }
     }
 }
@@ -668,8 +709,8 @@ mod tests {
         let resp = app()
             .oneshot(
                 Request::put("/db/default/graph-store?default")
-                    .header("content-type", "text/turtle")
-                    .body(Body::from("<s> <p> <o> ."))
+                    .header("content-type", "application/rdf+xml")
+                    .body(Body::from("<rdf:RDF/>"))
                     .unwrap(),
             )
             .await
@@ -757,7 +798,8 @@ mod tests {
         let headers = HeaderMap::new();
         let body = Bytes::new();
         let result = parse_body_to_ntriples(&headers, &body).unwrap();
-        assert!(result.is_empty());
+        assert!(result.lines.is_empty());
+        assert!(result.prologue.is_empty());
     }
 
     #[test]
@@ -770,17 +812,26 @@ mod tests {
              <http://ex.org/s> <http://ex.org/p2> \"world\" .\n",
         );
         let result = parse_body_to_ntriples(&headers, &body).unwrap();
-        assert_eq!(result.len(), 2);
-        assert!(result[0].contains("<http://ex.org/s>"));
+        assert_eq!(result.lines.len(), 2);
+        assert!(result.lines[0].contains("<http://ex.org/s>"));
+        assert!(result.prologue.is_empty());
     }
 
     #[test]
-    fn parse_turtle_returns_error() {
+    fn parse_turtle_extracts_prefixes() {
         let mut headers = HeaderMap::new();
         headers.insert("content-type", "text/turtle".parse().unwrap());
-        let body = Bytes::from("<s> <p> <o> .");
-        let err = parse_body_to_ntriples(&headers, &body);
-        assert!(err.is_err());
+        let body = Bytes::from(
+            "@prefix ex: <http://example.org/> .\n\
+             @base <http://example.org/base/> .\n\
+             ex:s ex:p ex:o .\n",
+        );
+        let parsed = parse_body_to_ntriples(&headers, &body).unwrap();
+        assert_eq!(parsed.prologue.len(), 2);
+        assert_eq!(parsed.prologue[0], "PREFIX ex: <http://example.org/>");
+        assert_eq!(parsed.prologue[1], "BASE <http://example.org/base/>");
+        assert_eq!(parsed.lines.len(), 1);
+        assert!(parsed.lines[0].contains("ex:s"));
     }
 
     #[test]
@@ -798,8 +849,11 @@ mod tests {
 
     #[test]
     fn build_insert_data_default_graph() {
-        let lines = vec!["<http://ex.org/s> <http://ex.org/p> \"val\" .".to_string()];
-        let sparql = build_insert_data(&GraphTarget::Default, &lines);
+        let parsed = ParsedBody {
+            prologue: vec![],
+            lines: vec!["<http://ex.org/s> <http://ex.org/p> \"val\" .".to_string()],
+        };
+        let sparql = build_insert_data(&GraphTarget::Default, &parsed);
         assert!(sparql.starts_with("INSERT DATA"));
         assert!(sparql.contains("<http://ex.org/s>"));
         assert!(!sparql.contains("GRAPH"));
@@ -807,9 +861,24 @@ mod tests {
 
     #[test]
     fn build_insert_data_named_graph() {
-        let lines = vec!["<http://ex.org/s> <http://ex.org/p> \"val\" .".to_string()];
-        let sparql = build_insert_data(&GraphTarget::Named("http://ex.org/g1".into()), &lines);
+        let parsed = ParsedBody {
+            prologue: vec![],
+            lines: vec!["<http://ex.org/s> <http://ex.org/p> \"val\" .".to_string()],
+        };
+        let sparql = build_insert_data(&GraphTarget::Named("http://ex.org/g1".into()), &parsed);
         assert!(sparql.contains("GRAPH <http://ex.org/g1>"));
+    }
+
+    #[test]
+    fn build_insert_data_with_prologue() {
+        let parsed = ParsedBody {
+            prologue: vec!["PREFIX ex: <http://example.org/>".to_string()],
+            lines: vec!["ex:s ex:p ex:o .".to_string()],
+        };
+        let sparql = build_insert_data(&GraphTarget::Default, &parsed);
+        assert!(sparql.starts_with("PREFIX ex:"));
+        assert!(sparql.contains("INSERT DATA"));
+        assert!(sparql.contains("ex:s ex:p ex:o"));
     }
 
     // -----------------------------------------------------------------------

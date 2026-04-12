@@ -238,8 +238,8 @@ fn format_sparql_response(
     }
 }
 
-/// Serializes CONSTRUCT/DESCRIBE results as Turtle.
-fn turtle_response(result: &grafeo_engine::database::QueryResult) -> Response {
+/// Serializes CONSTRUCT/DESCRIBE results as triples with the given Content-Type.
+fn triples_response(result: &grafeo_engine::database::QueryResult, content_type: &str) -> Response {
     let mut lines = Vec::new();
     for row in result.rows() {
         if row.len() >= 3 {
@@ -252,28 +252,19 @@ fn turtle_response(result: &grafeo_engine::database::QueryResult) -> Response {
     let body = lines.join("\n");
     Response::builder()
         .status(StatusCode::OK)
-        .header("Content-Type", "text/turtle; charset=utf-8")
+        .header("Content-Type", content_type)
         .body(Body::from(body))
         .expect("valid response")
 }
 
+/// Serializes CONSTRUCT/DESCRIBE results as Turtle.
+fn turtle_response(result: &grafeo_engine::database::QueryResult) -> Response {
+    triples_response(result, "text/turtle; charset=utf-8")
+}
+
 /// Serializes CONSTRUCT/DESCRIBE results as N-Triples.
 fn ntriples_response(result: &grafeo_engine::database::QueryResult) -> Response {
-    let mut lines = Vec::new();
-    for row in result.rows() {
-        if row.len() >= 3 {
-            let s = &row[0];
-            let p = &row[1];
-            let o = &row[2];
-            lines.push(format!("{s} {p} {o} ."));
-        }
-    }
-    let body = lines.join("\n");
-    Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "application/n-triples; charset=utf-8")
-        .body(Body::from(body))
-        .expect("valid response")
+    triples_response(result, "application/n-triples; charset=utf-8")
 }
 
 #[cfg(test)]
