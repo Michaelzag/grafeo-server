@@ -361,6 +361,11 @@ fn dispatch_query(
         }
     };
 
+    // The engine wraps PermissionDenied as Error::Query(Semantic, ...) with no
+    // distinct error kind, so string matching is the only way to distinguish
+    // permission errors from other semantic errors (type mismatches, unknown
+    // identifiers, etc.). Track: GrafeoDB/grafeo#TBD for a dedicated
+    // QueryErrorKind::PermissionDenied variant.
     result.map_err(|e| {
         let msg = e.to_string();
         if msg.contains("permission denied") {

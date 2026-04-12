@@ -6586,6 +6586,48 @@ async fn auth_graph_store_with_scoped_token() {
         "admin should reach graph-store on otherdb, got {}",
         resp.status()
     );
+
+    // Scoped token must NOT access graph-store on "otherdb" (out of scope)
+    let resp = client
+        .get(format!("{base}/db/otherdb/graph-store?default"))
+        .header("Authorization", format!("Bearer {scoped_token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        403,
+        "scoped token should be denied graph-store on out-of-scope db, got {}",
+        resp.status()
+    );
+
+    let resp = client
+        .put(format!("{base}/db/otherdb/graph-store?default"))
+        .header("Authorization", format!("Bearer {scoped_token}"))
+        .header("content-type", "application/n-triples")
+        .body("")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        403,
+        "scoped token should be denied graph-store PUT on out-of-scope db, got {}",
+        resp.status()
+    );
+
+    let resp = client
+        .delete(format!("{base}/db/otherdb/graph-store?default"))
+        .header("Authorization", format!("Bearer {scoped_token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        403,
+        "scoped token should be denied graph-store DELETE on out-of-scope db, got {}",
+        resp.status()
+    );
 }
 
 /// Transaction rollback with owner mismatch.

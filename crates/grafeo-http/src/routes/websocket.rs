@@ -183,7 +183,7 @@ async fn handle_with_subscriptions<S, R>(
                                 id: None,
                                 error: "forbidden".to_string(),
                                 detail: Some(format!(
-                                    "token not authorized for database '{db}'"
+                                    "not authorized for database '{db}'"
                                 )),
                             }
                         } else {
@@ -275,7 +275,7 @@ async fn process_query(
         return WsServerMessage::Error {
             id,
             error: "forbidden".to_string(),
-            detail: Some(format!("token not authorized for database '{db_name}'")),
+            detail: Some(format!("not authorized for database '{db_name}'")),
         };
     }
     let params = match convert_json_params(req.params.as_ref()) {

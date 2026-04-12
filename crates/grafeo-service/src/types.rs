@@ -475,7 +475,7 @@ pub struct CreateTokenRequest {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct TokenScopeRequest {
     /// Permission level: "admin", "read-write", "read-only".
-    #[serde(default = "default_admin_role")]
+    #[serde(default = "default_role")]
     pub role: String,
     /// Databases this token can access. Empty = all databases.
     #[serde(default)]
@@ -485,7 +485,7 @@ pub struct TokenScopeRequest {
 impl Default for TokenScopeRequest {
     fn default() -> Self {
         Self {
-            role: "admin".to_string(),
+            role: "read-only".to_string(),
             databases: vec![],
         }
     }
@@ -498,8 +498,8 @@ impl TokenScopeRequest {
     }
 }
 
-fn default_admin_role() -> String {
-    "admin".to_string()
+fn default_role() -> String {
+    "read-only".to_string()
 }
 
 /// Token response (returned from list/get/create endpoints).

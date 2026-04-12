@@ -20,7 +20,7 @@ impl AuthContext {
             && !info.scope.databases.iter().any(|d| d == db_name)
         {
             return Err(ApiError::forbidden(format!(
-                "token not authorized for database '{db_name}'"
+                "not authorized for database '{db_name}'"
             )));
         }
         Ok(())

@@ -78,6 +78,7 @@ pub async fn graph_store_get(
     auth: AuthContext,
     _headers: HeaderMap,
 ) -> Result<Response, ApiError> {
+    auth.check_db_access(&db_name)?;
     let target = resolve_target(&params)?;
 
     let sparql = match target {
@@ -135,6 +136,7 @@ pub async fn graph_store_head(
     Query(params): Query<GraphStoreParams>,
     auth: AuthContext,
 ) -> Result<Response, ApiError> {
+    auth.check_db_access(&db_name)?;
     let target = resolve_target(&params)?;
 
     let sparql = match target {
@@ -203,6 +205,7 @@ pub async fn graph_store_put(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, ApiError> {
+    auth.check_db_access(&db_name)?;
     let target = resolve_target(&params)?;
     let nt_triples = parse_body_to_ntriples(&headers, &body)?;
 
@@ -265,6 +268,7 @@ pub async fn graph_store_post(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, ApiError> {
+    auth.check_db_access(&db_name)?;
     let nt_triples = parse_body_to_ntriples(&headers, &body)?;
     let read_only = state.service().is_query_read_only();
     let identity = auth.identity(read_only);
@@ -348,6 +352,7 @@ pub async fn graph_store_delete(
     Query(params): Query<GraphStoreParams>,
     auth: AuthContext,
 ) -> Result<Response, ApiError> {
+    auth.check_db_access(&db_name)?;
     let target = resolve_target(&params)?;
 
     let sparql = match target {
